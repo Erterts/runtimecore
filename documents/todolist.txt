@@ -1,0 +1,38 @@
+1. ОБЩАЯ СТРУКТУРА
+-----------------------------------------------------------------------
+/src
+    main.cpp                 – сценарный цикл, многопоточность
+/include
+    graph_struct.hpp         – LiteInfo / FatInfo + typedef map’ов
+    detect_intrusion.hpp     – 9 правил + apply_risk_flag()
+    json_io.hpp              – parse_lite(), parse_full(), to_delta(), здесь же проверка переиспользований pid через exec_id и исключение коллизий
+    delta_cache.hpp          – сборка дельт 100 мс
+    snapshot_ring.hpp        – кольцевой буфер снимков графа
+    crc.hpp / crc.cpp        – Fletcher-32 SIMD
+/documents
+    ai_assistents.md
+    todolist.txt
+/tests
+    catch2.h
+    unittests.cpp
+2. Логика ядра 
+---------------------------------------------------------------------
+Ловим изменения tmpfs и берём оттуда сырой лог
+Проверяем целостность пакета по контрольной сумме fletcher32
+Собираем 2 хранилища в параллельных потоках: 
+- std::unordered_map по ключу pid - легкая версия, достаточная для создания графа. в ней храним тип события,ppid,gppid(родительский процесс для родителя, достаётся за O(1)),timestamp
+- boost::unorderet_flat_set по ключу exec_id- сюда раскрываем полностью входящий json по структурам graph_struct.hpp с помощью json_io.hpp
+Запускаем блок детекта ИБ атак, там же расставляем флаг зараженного процесса и флаги in_risk для проессов, связанных с зараженным
+Раз в 100мс формируем json изменений с помощью delta_cache 
+Раз в 2с кэшируем слепок графа с помощью snapshot.hpp в кольцевой буфер
+
+Весь обмен данными с DevOps и front частями идет через tmpfs
+
+3. Константы и требования
+-----------------------------------------------------------------------
+constexpr int   DELTA_PERIOD_MS   = 100;   // формирование дельты
+constexpr int   SNAPSHOT_PERIOD_S =  2;    // частота слепков
+constexpr int   RING_SIZE         = 150;   // 5 мин / 2 c
+constexpr int   STUB_LAG_MS       = 5000;  // ожидание родителя
+constexpr size_t TMPFS_LIMIT_MB   = 2048;  // макс размер /dev/shm
+constexpr int   RISK_PROP_LIMIT   = 50000; // макс. вершин при BFS
