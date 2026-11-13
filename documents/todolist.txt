@@ -3,25 +3,26 @@
 /src
     main.cpp                 – сценарный цикл, многопоточность
 /include
-    graph_struct.hpp         – LiteInfo / FatInfo + typedef map’ов
-    detect_intrusion.hpp     – 9 правил + apply_risk_flag()
-    json_io.hpp              – parse_lite(), parse_full(), to_delta(), здесь же проверка переиспользований pid через exec_id и исключение коллизий
-    delta_cache.hpp          – сборка дельт 100 мс
-    snapshot_ring.hpp        – кольцевой буфер снимков графа
-    crc.hpp / crc.cpp        – Fletcher-32 SIMD
+    graph_struct.h         – LiteInfo / FatInfo + typedef map’ов
+    detect.h               – 10 правил + apply_risk_flag()
+    json_io.h              – parse_lite(), parse_full(), to_delta(), здесь же проверка переиспользований pid через exec_id и исключение коллизий
+    delta_cache.h          – сборка дельт 100 мс
+    snapshot.h             – кольцевой буфер снимков графа
+    cr_check.cpp           – Fletcher-32 SIMD
 /documents
     ai_assistents.md
     todolist.txt
+    architecture.md
 /tests
     catch2.h
     unittests.cpp
 2. Логика ядра 
 ---------------------------------------------------------------------
-Ловим изменения tmpfs и берём оттуда сырой лог
+Ловим изменения tmpfs и берём оттуда сырой лог при его появлении
 Проверяем целостность пакета по контрольной сумме fletcher32
-Собираем 2 хранилища в параллельных потоках: 
-- std::unordered_map по ключу pid - легкая версия, достаточная для создания графа. в ней храним тип события,ppid,gppid(родительский процесс для родителя, достаётся за O(1)),timestamp
-- boost::unorderet_flat_set по ключу exec_id- сюда раскрываем полностью входящий json по структурам graph_struct.hpp с помощью json_io.hpp
+Собираем 2 хранилища в параллельных неблокирующих потоках: 
+- boost::unordered_node_map по ключу pid - легкая версия, достаточная для создания графа. в ней храним тип события,ppid,gppid(родительский процесс для родителя, достаётся за O(1)),timestamp
+- boost::unordered_flat_set по ключу exec_id- сюда раскрываем полностью входящий json по структурам graph_struct.hpp с помощью json_io.hpp
 Запускаем блок детекта ИБ атак, там же расставляем флаг зараженного процесса и флаги in_risk для проессов, связанных с зараженным
 Раз в 100мс формируем json изменений с помощью delta_cache 
 Раз в 2с кэшируем слепок графа с помощью snapshot.hpp в кольцевой буфер
