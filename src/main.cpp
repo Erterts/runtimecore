@@ -3,115 +3,149 @@
 #include <atomic>
 #include <queue>
 #include <condition_variable>
-#include <filesystem>
+#include <shared_mutex>
 #include <chrono>
 
-#include "crc.hpp"             // fletcher32(...)
-#include "json_io.h"           // jp::parse_lite / parse_full
+#include "crc.hpp"
+#include "json_io.h"
 #include "graph_struct.h"
-#include "detect.h"            // DETECTORS, apply_risk_flag
+#include "detect.h"          // прототипы всех 10 правил
 #include "delta_cache.h"
 #include "snapshot.h"
-#include "ns_shutdown.h"
+#include "ns_shutdown.hpp"
 
-// ---------- заглушки (реализуются позже) ---------------------
-std::string read_raw();                                   // tmpfs reader
-void        upsert_lite(const LitePkt&, PidMap&);         // stub+insert
-void        sweep_buckets(PidMap&, int64_t now_ms);       // LAG→ORPHAN
-Event       make_event(const LitePkt&);                   // build Event
-void        write_to_tmpfs(const char* path,              // atomic rename
-                           const std::string& data);
+// ---------- заглушки (будут реализованы позже)  ----------------------
+std::string read_raw();                                    // tmpfs → std::string
+void        upsert_lite(const LitePkt&, PidMap&);          // Stub + insert
+void        sweep_buckets(PidMap&, int64_t now_ms);        // LAG→ORPHAN
+Event       make_event(const LitePkt&);                    // для DeltaCache
+void        write_to_tmpfs(const char* path,
+                           const std::string& data);       // атомарная запись
 
-// ---------- глобальные структуры -----------------------------
-static PidMap     g_pid_map{/*arena*/};
-static ExecMap    g_exec_map{/*arena*/};
+// ---------- глобальные контейнеры ------------------------------------
+static PidMap     g_pid_map{/* аллокатор */};
+static ExecMap    g_exec_map{/* аллокатор */};
 static ExecIndex  g_exec_index;
 
 static DeltaCache     g_delta;
 static SnapshotRing<> g_ring;
 
-// ---------- потокобезопасная очередь -------------------------
-struct FullJob { ExecId exec; std::string raw; };
 
+static std::shared_mutex g_exec_mtx;   // RCU-чтения, exclusive-write
+
+
+struct FullJob { ExecId exec; std::string raw; };
 std::mutex                     q_mtx;
 std::condition_variable        q_cv;
 std::queue<FullJob>            q_full;
 
-// ---------- раскрытие полной структуры json ------------------------
+// ---------- разделение детекторов -----------------------------------
+/*
+    DETECTORS_LITE  (запускаются сразу в main-потоке)
+        2  Process Orphan
+        5  IP Fan-out spike
+        10 Container-Escape   
+
+    DETECTORS_DEEP  (heavy-thread, когда FatInfo уже создан)
+        1  Reverse Shell
+        3  Download-and-Exec
+        4  K8s Token Read
+        6  Sys-file Rewrite
+        7  Temp-dir Exec
+        8  Mass chmod 777
+        9  SUID Root escalation
+*/
+constexpr std::array<DetectFn*,3> DETECTORS_LITE = {
+    rule_orphan, rule_ip_fanout, rule_container_escape
+};
+constexpr std::array<DetectFn*,7> DETECTORS_DEEP = {
+    rule_reverse_shell, rule_download_exec, rule_k8s_token,
+    rule_sysfile_rewrite, rule_tmpdir_exec,
+    rule_mass777,       rule_suid_root
+};
+
+// ---------- полный разбор json логов + deep-правила ---------------
 void full_parser_worker()
 {
     while (shutdown::running.load(std::memory_order_relaxed))
     {
-        std::unique_lock lk(q_mtx);
-        q_cv.wait(lk, []{
+        std::unique_lock ql(q_mtx);
+        q_cv.wait(ql, []{
             return !q_full.empty() || !shutdown::running.load();
         });
-
-        if (!shutdown::running && q_full.empty())
-            break;
+        if (!shutdown::running && q_full.empty()) break;
 
         FullJob job = std::move(q_full.front());
         q_full.pop();
-        lk.unlock();
+        ql.unlock();
 
-        auto [fat, ok] = jp::parse_full(job.raw, g_exec_index);
-        if (ok) g_exec_map.emplace(job.exec, std::move(fat));
+        auto [fat_ptr, ok] = jp::parse_full(job.raw, g_exec_index);
+        if (!ok) continue;
+
+        {
+            std::unique_lock wl(g_exec_mtx);        // write-lock
+            g_exec_map.emplace(job.exec, fat_ptr);  // вставка FatInfo
+        }
+
+        // глубокий ИБ анализ
+        {
+            std::shared_lock rl(g_exec_mtx);
+            for (auto fn : DETECTORS_DEEP)
+                if (fn(job.exec, g_pid_map, g_exec_map))
+                    apply_risk_flag(job.exec);
+        }
     }
 }
 
-// ---------- Основной код--------------------------------------
+
 int main()
 {
     using clock = std::chrono::steady_clock;
-    shutdown::install(q_cv);
-
+    shutdown::install(q_cv);          
     std::thread heavy{full_parser_worker};
 
     int64_t next_sweep_ts   = 0;
     const   int64_t sweep_period_ms = 1000;
-
-    // ---------- Главный цикл--------------------------------------
+// Основной цикл
     while (shutdown::running.load(std::memory_order_relaxed))
     {
-        /* 1. чтение сырых данных */
-        std::string raw = read_raw();           
+        // ---------- читаем сырой лог ---------------
+        std::string raw = read_raw();
         if (!shutdown::running) break;
-        if (raw.empty())        continue;
-
-        /* 2. CRC */
+        if (raw.empty())              continue;
+        // ----------проверяем целостность пакетов ---------------
         if (fletcher32({reinterpret_cast<const std::byte*>(raw.data()),
                         raw.size()}) != 0)
-            continue;                           // битый пакет
+            continue;                 
 
-        /* 3. лёгкий разбор + insert */
         auto lite = jp::parse_lite(raw);
         upsert_lite(lite, g_pid_map);
 
-        /* 4. ставим задачу тяжёлому потоку */
+        // ---------- Запуск тяжелого детекта по готовности парсера ---------------
         {
             std::lock_guard lg(q_mtx);
             q_full.push({lite.exec_id, std::move(raw)});
         }
         q_cv.notify_one();
 
-        /* 5. ИБ анализ */
-        for (auto fn : DETECTORS)
-            if (fn(lite.pid, g_pid_map, g_exec_map))
-                apply_risk_flag(lite.pid);
+        /* ---- ЛЁГКИЕ правила (можно определить только по pid_map) ---------------------- */
+        {
+            std::shared_lock rl(g_exec_mtx);        // читает exec_map (escape)
+            for (auto fn : DETECTORS_LITE)
+                if (fn(lite.pid, g_pid_map, g_exec_map))
+                    apply_risk_flag(lite.pid);
+        }
 
-        /* 6. Добавляем новое событие в дельту */
+        // ---------- новое событие в дельту ---------------
         g_delta.register_event(make_event(lite));
-
-        /* 7. Подгружаем родительский процесс, если появился, иначе флаг orphan */
+        /*  подгружаем родительский процесс, если появился, иначе флаг orphan */
         int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              clock::now().time_since_epoch()).count();
-        if (now_ms >= next_sweep_ts)
-        {
+        if (now_ms >= next_sweep_ts) {
             sweep_buckets(g_pid_map, now_ms);
             next_sweep_ts = now_ms + sweep_period_ms;
         }
-
-        /* 8. дельта и кэш слепка графа */
+        /* кэшируем дельту и слепок графа */
         std::string delta_json;
         if (g_delta.flush_if_needed(now_ms, delta_json))
             write_to_tmpfs("/dev/shm/delta.json", delta_json);
@@ -119,8 +153,8 @@ int main()
         g_ring.maybe_save(g_pid_map, now_ms);
     }
 
-    /* корректное завершение */
-    q_cv.notify_all();   // разбудить heavy, если он ждёт
-    heavy.join();        // дожидаемся выхода потока
+    /* безопасный выход  */
+    q_cv.notify_all();
+    heavy.join();
     return 0;
 }
