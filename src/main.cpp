@@ -5,156 +5,191 @@
 #include <condition_variable>
 #include <shared_mutex>
 #include <chrono>
-
-#include "crc.hpp"
-#include "json_io.h"
-#include "graph_struct.h"
-#include "detect.h"          // прототипы всех 10 правил
-#include "delta_cache.h"
-#include "snapshot.h"
+#include "globals.hpp"
+#include "cr_check.cpp"
+#include "json_io.hpp"
+#include "graph_struct.hpp"
+#include "detect.hpp"          // все 10 inline-правил
+#include "delta_cache.hpp"
+#include "snapshot.hpp"
 #include "ns_shutdown.hpp"
+#include "flag_change.hpp"
+#include "upsert_lite.cpp"
+#include "detect_state.hpp"
+#include "cr_check.hpp"
+#include "simdjson.h"
+// ─── заглушки (реализуем потом) ────────────────────────────────────
+std::string read_raw();                        // tmpfs reader
+Event       make_event(const LiteInfo&);
+void        write_to_tmpfs(const char*, const std::string&);
 
-// ---------- заглушки (будут реализованы позже)  ----------------------
-std::string read_raw();                                    // tmpfs → std::string
-void        upsert_lite(const LitePkt&, PidMap&);          // Stub + insert
-void        sweep_buckets(PidMap&, int64_t now_ms);        // LAG→ORPHAN
-Event       make_event(const LitePkt&);                    // для DeltaCache
-void        write_to_tmpfs(const char* path,
-                           const std::string& data);       // атомарная запись
+// ─── глобальные контейнеры ─────────────────────────────────────────
 
-// ---------- глобальные контейнеры ------------------------------------
-static PidMap     g_pid_map{/* аллокатор */};
-static ExecMap    g_exec_map{/* аллокатор */};
-static ExecIndex  g_exec_index;
-
+static ExecIndex      g_exec_index;
+static AuxState g_aux;
 static DeltaCache     g_delta;
 static SnapshotRing<> g_ring;
+static StubWheel      g_wheel;
+// ─── мьютексы для карт (reader/writer) ─────────────────────────────
+static std::shared_mutex g_pid_mtx;
+static std::shared_mutex g_exec_mtx;
 
+// ───  очереди  ─────────────────────────────────────────────────────
+// 1) JSON-строки heavy-парсеру
+struct FullJob { Pid pid; Pid ppid; ExecId exec_id; std::string raw; };
+std::mutex                     q_json_m;
+std::condition_variable        q_json_cv;
+std::queue<FullJob>            q_json;
 
-static std::shared_mutex g_exec_mtx;   // RCU-чтения, exclusive-write
+// 2) Готовые Pid deep-детектору
+std::mutex                     q_det_m;
+std::condition_variable        q_det_cv;
+std::queue<Pid>                q_det;
 
-
-struct FullJob { ExecId exec; std::string raw; };
-std::mutex                     q_mtx;
-std::condition_variable        q_cv;
-std::queue<FullJob>            q_full;
-
-// ---------- разделение детекторов -----------------------------------
-/*
-    DETECTORS_LITE  (запускаются сразу в main-потоке)
-        2  Process Orphan
-        5  IP Fan-out spike
-        10 Container-Escape   
-
-    DETECTORS_DEEP  (heavy-thread, когда FatInfo уже создан)
-        1  Reverse Shell
-        3  Download-and-Exec
-        4  K8s Token Read
-        6  Sys-file Rewrite
-        7  Temp-dir Exec
-        8  Mass chmod 777
-        9  SUID Root escalation
-*/
-constexpr std::array<DetectFn*,3> DETECTORS_LITE = {
+// ─── массивы правил ────────────────────────────────────────────────
+constexpr std::array<DetectFn*,3> DETECT_LITE = {
     rule_orphan, rule_ip_fanout, rule_container_escape
 };
-constexpr std::array<DetectFn*,7> DETECTORS_DEEP = {
+constexpr std::array<DetectFn*,7> DETECT_DEEP = {
     rule_reverse_shell, rule_download_exec, rule_k8s_token,
     rule_sysfile_rewrite, rule_tmpdir_exec,
-    rule_mass777,       rule_suid_root
+    rule_mass777, rule_suid_root
 };
 
-// ---------- полный разбор json логов + deep-правила ---------------
-void full_parser_worker()
+// ─── worker 1: Heavy JSON → FatInfo → очередь detect  ──────────────
+void heavy_parser_worker()
 {
-    while (shutdown::running.load(std::memory_order_relaxed))
+    while (shutdown::running.load())
     {
-        std::unique_lock ql(q_mtx);
-        q_cv.wait(ql, []{
-            return !q_full.empty() || !shutdown::running.load();
+        std::unique_lock lk(q_json_m);
+        q_json_cv.wait(lk, []{
+            return !q_json.empty() || !shutdown::running.load();
         });
-        if (!shutdown::running && q_full.empty()) break;
+        if (!shutdown::running && q_json.empty()) break;
 
-        FullJob job = std::move(q_full.front());
-        q_full.pop();
-        ql.unlock();
+        FullJob job = std::move(q_json.front()); q_json.pop();
+        lk.unlock();
 
-        auto [fat_ptr, ok] = jp::parse_full(job.raw, g_exec_index);
+        auto [fat, ok] = jp::parse_full(job.raw, g_exec_index);
         if (!ok) continue;
 
-        {
-            std::unique_lock wl(g_exec_mtx);        // write-lock
-            g_exec_map.emplace(job.exec, fat_ptr);  // вставка FatInfo
+        {   std::unique_lock wl(g_exec_mtx);
+            g_exec_map.emplace(job.exec_id, fat);
+            fill_child_pids(job.pid,job.ppid,g_exec_index,g_exec_map);
         }
 
-        // глубокий ИБ анализ
+        /* Pid ребёнка уже известен в LitePkt => кладём в detect-очередь */
+        {
+            std::lock_guard lg(q_det_m);
+            q_det.push(job.pid);               // exec_id==pid в текущем логе благодаря двусторонней связи
+        }
+        q_det_cv.notify_one();
+    }
+}
+
+// ─── worker 2: Deep-detect + BFS  (lock-per-step)  ─────────────────
+void detect_worker()
+{
+    while (shutdown::running.load())
+    {
+        std::unique_lock lk(q_det_m);
+        q_det_cv.wait(lk, []{
+            return !q_det.empty() || !shutdown::running.load();
+        });
+        if (!shutdown::running && q_det.empty()) break;
+
+        Pid pid = q_det.front(); q_det.pop();
+        lk.unlock();
+
+        /* deep-rules под read-lock exec_map */
+        bool alert = false;
         {
             std::shared_lock rl(g_exec_mtx);
-            for (auto fn : DETECTORS_DEEP)
-                if (fn(job.exec, g_pid_map, g_exec_map))
-                    apply_risk_flag(job.exec);
+            for (auto fn : DETECT_DEEP)
+                alert |= fn(pid, g_pid_map, g_exec_map,g_aux);
+        }
+        if (!alert) continue;
+
+        /* ─── короткий BFS с lock-per-step ─── */
+        std::queue<Pid> q; q.push(pid);
+        while (!q.empty())
+        {
+            Pid cur = q.front(); q.pop();
+
+            std::shared_lock pl(g_pid_mtx);                 // ≤1 µs
+            auto it = g_pid_map.find(cur);
+            if (it == g_pid_map.end()) continue;
+
+            auto &info = it->second;
+            if (info.flag.load() < Flag::InRisk)
+                info.flag.store(Flag::InRisk);
+
+            for (const auto& [pid_child, li_child] : g_pid_map)
+    if (li_child.ppid == cur)
+        q.push(pid_child);
         }
     }
 }
 
-
+// ───  main-thread : Lite-парсинг, быстрые правила, формирования вывода  ─────────
 int main()
 {
-    using clock = std::chrono::steady_clock;
-    shutdown::install(q_cv);          
-    std::thread heavy{full_parser_worker};
+    using clk = std::chrono::steady_clock;
+    shutdown::install();          // сигналы
 
-    int64_t next_sweep_ts   = 0;
-    const   int64_t sweep_period_ms = 1000;
-// Основной цикл
-    while (shutdown::running.load(std::memory_order_relaxed))
+    std::thread heavy {heavy_parser_worker};
+    std::thread detect{detect_worker };
+
+    int64_t next_tick = 0;
+    const   int64_t SWEEP_MS = 1000;
+
+    while (true)
     {
-        // ---------- читаем сырой лог ---------------
+        if(!shutdown::running.load()) break;
         std::string raw = read_raw();
         if (!shutdown::running) break;
-        if (raw.empty())              continue;
-        // ----------проверяем целостность пакетов ---------------
-        if (fletcher32({reinterpret_cast<const std::byte*>(raw.data()),
-                        raw.size()}) != 0)
-            continue;                 
+        if (raw.empty()) continue;
 
-        auto lite = jp::parse_lite(raw);
+        //auto crc = fletcher32(std::as_bytes(std::span{raw.data(), raw.size()})); - не нужно, в логах нет контрольной суммы, целостность даёт сам runtime radar
+        if(!fast_json_validate(raw.data(), raw.size())) continue;
+
+        LiteInfo lite;
+        if (!jp::parse_lite(raw, lite))   continue;     // ошибка → drop
         upsert_lite(lite, g_pid_map);
 
-        // ---------- Запуск тяжелого детекта по готовности парсера ---------------
-        {
-            std::lock_guard lg(q_mtx);
-            q_full.push({lite.exec_id, std::move(raw)});
-        }
-        q_cv.notify_one();
+        /* быстрая проверка правил */
+        for (auto fn : DETECT_LITE)
+            if (fn(lite.pid, g_pid_map, g_exec_map,g_aux))
+                q_det.push(lite.pid), q_det_cv.notify_one();
 
-        /* ---- ЛЁГКИЕ правила (можно определить только по pid_map) ---------------------- */
+        /* кладём JSON тяжёлому парсеру */
         {
-            std::shared_lock rl(g_exec_mtx);        // читает exec_map (escape)
-            for (auto fn : DETECTORS_LITE)
-                if (fn(lite.pid, g_pid_map, g_exec_map))
-                    apply_risk_flag(lite.pid);
+            std::lock_guard lg(q_json_m);
+            q_json.push({lite.pid,lite.ppid,lite.exec_id, std::move(raw)});
         }
+        q_json_cv.notify_one();
 
-        // ---------- новое событие в дельту ---------------
+        /* регистрируем событие для формирование дельты */
         g_delta.register_event(make_event(lite));
-        /*  подгружаем родительский процесс, если появился, иначе флаг orphan */
-        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             clock::now().time_since_epoch()).count();
-        if (now_ms >= next_sweep_ts) {
-            sweep_buckets(g_pid_map, now_ms);
-            next_sweep_ts = now_ms + sweep_period_ms;
+        /* проверяем, дошёл ли лог родительского процесса */
+        int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          clk::now().time_since_epoch()).count();
+        if (now >= next_tick) {
+        g_wheel.tick(now, g_pid_map);
+        next_tick = now + BUCKET_STEP_MS;
         }
-        /* кэшируем дельту и слепок графа */
-        std::string delta_json;
-        if (g_delta.flush_if_needed(now_ms, delta_json))
-            write_to_tmpfs("/dev/shm/delta.json", delta_json);
+        //кэш и дельта
+        std::string delta;
+        if (g_delta.flush_if_needed(now, delta))
+            write_to_tmpfs("/dev/shm/delta.json", delta);
 
-        g_ring.maybe_save(g_pid_map, now_ms);
+        g_ring.maybe_save(g_pid_map, now);
     }
 
-    /* безопасный выход  */
-    q_cv.notify_all();
-    heavy.join();
+    /* graceful-exit */
+    q_json_cv.notify_all();
+    q_det_cv.notify_all();
+    heavy.join(); 
+    detect.join();
     return 0;
 }

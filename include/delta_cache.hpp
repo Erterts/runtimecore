@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "graph_struct.h"
+#include "graph_struct.hpp"
 
 /*  PURPOSE
     Накапливает изменения графа между флашами и формирует

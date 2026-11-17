@@ -5,7 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include "graph_struct.h"      // нужен alias LiteGraph = PidMap
+#include "graph_struct.hpp"      // нужен alias LiteGraph = PidMap
 
 /*  PURPOSE
     Кольцевой буфер из N снимков «лёгкого» графа (LiteGraph).
