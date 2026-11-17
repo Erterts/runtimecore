@@ -3,12 +3,16 @@
 #include <simdjson.h>            // fast DOM
 #include <rapidjson/writer.h>    // export
 #include "graph_struct.hpp"
-
-/* -------------------------------------------------------------
-   1.  Типы, возвращаемые парсерами
-   -------------------------------------------------------------*/
-
 using FatPtr   = std::shared_ptr<FatInfo>;        // тяжёлый результат
+/* -------------------------------------------------------------
+   1.  Вспомогательные функции
+   -------------------------------------------------------------*/
+inline bool fast_json_validate(const char* data, size_t len) noexcept // проверка целостности пакета данных вместо crc
+{
+    simdjson::ondemand::parser p;
+    auto result = p.iterate(data, len, /*realloc_if_needed*/ false);
+    return !result.error();          // true → JSON цел
+}
 static int64_t parse_iso8601_ns(std::string_view s) noexcept { 
      if (s.size() < 19) return 0;                       // YYYY-MM-DDTHH:MM:SS
 

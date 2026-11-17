@@ -6,7 +6,6 @@
 #include <shared_mutex>
 #include <chrono>
 #include "globals.hpp"
-#include "cr_check.cpp"
 #include "json_io.hpp"
 #include "graph_struct.hpp"
 #include "detect.hpp"          // все 10 inline-правил
@@ -16,7 +15,6 @@
 #include "flag_change.hpp"
 #include "upsert_lite.cpp"
 #include "detect_state.hpp"
-#include "cr_check.hpp"
 #include "tmpfs.hpp"
 #include "simdjson.h"
 // ─── заглушки (реализуем потом) ────────────────────────────────────

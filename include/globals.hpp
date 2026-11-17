@@ -3,6 +3,7 @@
 //==============================================================
 #pragma once
 #include <memory_resource>
+#include <functional>
 #include "graph_struct.hpp"   // PidMap / ExecMap
 
 /* ------------------------------------------------------------------
@@ -18,13 +19,13 @@ inline std::pmr::monotonic_buffer_resource arena{ 8 * 1024 * 1024 };
    ------------------------------------------------------------------*/
 inline PidMap g_pid_map{
         1024,                                // начальное число бакетов
-        std::hash<Pid>{}, std::equal_to<>,
+        std::hash<Pid>{}, std::equal_to<>(),
         PMR<std::pair<const Pid, LiteInfo>>{ &arena }   // allocator
 };
 
 inline ExecMap g_exec_map{
         1024,
-        ExecHash{}, std::equal_to<>,
+        ExecHash{}, std::equal_to<>(),
         PMR<std::pair<const ExecId, std::shared_ptr<FatInfo>>>{ &arena }
 };
 

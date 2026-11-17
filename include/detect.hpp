@@ -8,7 +8,6 @@
 #include <deque>
 #include <string>
 #include <cstdint>
-
 #include "graph_struct.hpp"
 #include "detect_state.hpp"      // AuxState и sliding-windows
 
