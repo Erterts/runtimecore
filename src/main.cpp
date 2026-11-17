@@ -17,6 +17,7 @@
 #include "upsert_lite.cpp"
 #include "detect_state.hpp"
 #include "cr_check.hpp"
+#include "tmpfs.hpp"
 #include "simdjson.h"
 // ─── заглушки (реализуем потом) ────────────────────────────────────
 std::string read_raw();                        // tmpfs reader
@@ -47,15 +48,23 @@ std::condition_variable        q_det_cv;
 std::queue<Pid>                q_det;
 
 // ─── массивы правил ────────────────────────────────────────────────
-constexpr std::array<DetectFn*,3> DETECT_LITE = {
-    rule_orphan, rule_ip_fanout, rule_container_escape
-};
-constexpr std::array<DetectFn*,7> DETECT_DEEP = {
-    rule_reverse_shell, rule_download_exec, rule_k8s_token,
-    rule_sysfile_rewrite, rule_tmpdir_exec,
-    rule_mass777, rule_suid_root
-};
+using DetectPair = std::pair<DetectFn*, RuleId>;
 
+constexpr std::array<DetectPair,3> DETECT_LITE = {{
+    {rule_orphan,        RuleId::Orphan},
+    {rule_ip_fanout,     RuleId::IpFanout},
+    {rule_container_escape, RuleId::ContainerEscape}
+}};
+
+constexpr std::array<DetectPair,7> DETECT_DEEP = {{
+    {rule_reverse_shell,   RuleId::ReverseShell},
+    {rule_download_exec,   RuleId::DownloadExec},
+    {rule_k8s_token,       RuleId::K8sTokenRead},
+    {rule_sysfile_rewrite, RuleId::SysFileRewrite},
+    {rule_tmpdir_exec,     RuleId::TempDirExec},
+    {rule_mass777,         RuleId::Mass777},
+    {rule_suid_root,       RuleId::SuidRoot}
+}};
 // ─── worker 1: Heavy JSON → FatInfo → очередь detect  ──────────────
 void heavy_parser_worker()
 {
@@ -105,7 +114,7 @@ void detect_worker()
         bool alert = false;
         {
             std::shared_lock rl(g_exec_mtx);
-            for (auto fn : DETECT_DEEP)
+            for (auto [fn,id] : DETECT_DEEP)
                 alert |= fn(pid, g_pid_map, g_exec_map,g_aux);
         }
         if (!alert) continue;
@@ -133,7 +142,7 @@ void detect_worker()
 
 // ───  main-thread : Lite-парсинг, быстрые правила, формирования вывода  ─────────
 int main()
-{
+{   init_io_paths();
     using clk = std::chrono::steady_clock;
     shutdown::install();          // сигналы
 
@@ -158,10 +167,8 @@ int main()
         upsert_lite(lite, g_pid_map);
 
         /* быстрая проверка правил */
-        for (auto fn : DETECT_LITE)
-            if (fn(lite.pid, g_pid_map, g_exec_map,g_aux))
-                q_det.push(lite.pid), q_det_cv.notify_one();
-
+        for (auto [fn, id] : DETECT_LITE)
+        if (fn(lite.pid, g_pid_map, g_exec_map, g_aux)) apply_risk_flag(lite.pid, id, g_pid_map);
         /* кладём JSON тяжёлому парсеру */
         {
             std::lock_guard lg(q_json_m);

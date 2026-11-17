@@ -7,44 +7,40 @@
 
 /*  PURPOSE
     Накапливает изменения графа между флашами и формирует
-    компактный JSON-объект вида:
+    компактный JSON вида
 
     {
-      "_ts": 1699550123,
-      "add":[ { "id":42,"ppid":1,"flag":0 } ],
-      "upd":[ { "id":42,"flag":2 } ],
-      "del":[ 99 ]
+      "_ts" : 1699550123,
+      "add" : [ { "id":42,"ppid":1,"flag":0 } ],
+      "upd" : [ { "id":42,"flag":2 } ]
     }
 */
 
-/* --- вспомогательные структуры ----------------------------------- */
-struct NodeAdd   { Pid id; Pid ppid; Flag flag; };
-struct NodeUpd   { Pid id; Flag flag;          };
-struct NodeDel   { Pid id;                     };
+/* ---------------- вспомогательные структуры ---------------- */
+struct NodeAdd { Pid id; Pid ppid; Flag flag; };
+struct NodeUpd { Pid id;          Flag flag; };
 
 struct Event
 {
-    enum class Kind { Add, Upd, Del } kind;
-    Pid   id;
-    Pid   ppid;      // только для Add
-    Flag  flag;      // для Add / Upd
-    int64_t ts;      // timestamp события
+    enum class Kind { Add, Upd } kind;  // «Del» больше нет
+    Pid      id;
+    Pid      ppid{0};   // meaningful only for Add
+    Flag     flag;
+    uint16_t rules;
+    int64_t  ts;
 };
 
-/* --- класс кэша ---------------------------------------------------- */
+/* ---------------- класс кэша -------------------------------- */
 class DeltaCache
 {
 public:
-    /* Регистрирует пришедшее событие (вызывается ядром). */
+    /* Регистрирует событие ядра. */
     void register_event(const Event& ev);
 
-    /* Если с момента last_flush прошло ≥ DELTA_PERIOD_MS,
-       формирует JSON в json_out и очищает кэш.
-       Возвращает true, если был флаш.                      */
+    /* Формирует JSON, если прошло ≥ period_ms_.  */
     bool flush_if_needed(int64_t now_epoch_ms,
                          std::string& json_out);
 
-    /* Шаг дельты в мс (по умолчанию 100) */
     void set_period(int ms) noexcept { period_ms_ = ms; }
 
 private:
@@ -53,5 +49,4 @@ private:
 
     std::vector<NodeAdd> adds_;
     std::vector<NodeUpd> upds_;
-    std::vector<NodeDel> dels_;
 };

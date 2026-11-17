@@ -1,5 +1,5 @@
 //==============================================================
-//  detect.h   (10 inline-правил + контейнеры вызова)
+//  detect.h   (фрагмент – правки для успешной сборки)
 //==============================================================
 #pragma once
 #include <array>
@@ -8,76 +8,65 @@
 #include <deque>
 #include <string>
 #include <cstdint>
-#include "graph_struct.hpp"      // LiteInfo, FatInfo, Pid, Flag
-#include "detect_state.hpp"
+
+#include "graph_struct.hpp"
+#include "detect_state.hpp"      // AuxState и sliding-windows
+
+/* ---------- локальные константы ---------------------------- */
+inline constexpr int FANOUT_THR = 8;      // порог IP-fanout (#5)
 
 
-// ---------- тип сигнатуры любого правила ---------------------
-using DetectFn = bool(Pid              pid,
-                      const PidMap&    lite,
-                      const ExecMap&   exec,
-                      AuxState&        aux);   // скользящие окна
+using DetectFn = bool(Pid, const PidMap&, const ExecMap&, AuxState&);
 
-// ---------- enum для удобной статистики ----------------------
-enum class RuleId : uint8_t {
-    ReverseShell = 0,
-    Orphan,
-    DownloadExec,
-    K8sTokenRead,
-    IpFanout,
-    SysFileRewrite,
-    TempDirExec,
-    Mass777,
-    SuidRoot,
-    ContainerEscape
-};
 
-/*-------------------------------------------------------------
-   10 INLINE-ПРАВИЛ (заглушки-шаблоны; реализация TODO)
-  -------------------------------------------------------------*/
 
-inline bool rule_reverse_shell(Pid pid, const PidMap& l, const ExecMap& e, AuxState& a)
+/* ================== INLINE-правила ========================= */
+
+inline bool rule_reverse_shell(Pid pid,const PidMap&, const ExecMap& em,AuxState& a)
 {
-    // TODO: binary == "/bin/sh" и в AuxState есть внеш. IP
-    return false;
+    auto fat = find_fat_by_pid(pid, g_exec_index, em);        // extern из main
+    if (!fat || !fat->meta.binary)  return false;
+    bool is_shell = fat->meta.binary->ends_with("/sh");
+    return is_shell && a.ip_fanout(pid) > 0;
 }
+
+
 inline bool rule_orphan(Pid pid, const PidMap& l, const ExecMap&, AuxState&)
 {
     auto it = l.find(pid);
-    return it!=l.end() && it->second.ppid==0 && it->second.flag!=Flag::TEMP_LAGGING;
+    return it!=l.end() && it->second.ppid==0 &&
+           it->second.flag!=Flag::TEMP_LAGGING;
 }
-inline bool rule_download_exec(Pid pid, const PidMap&, const ExecMap& e, AuxState&)
+
+inline bool rule_download_exec(Pid pid, const PidMap&, const ExecMap& em,AuxState&)
 {
-    auto it = e.find_by_pid(pid);            // helper: индекс exec_id→ptr
-    return it && it->second->meta.cwd          //
-                && it->second->meta.cwd->rfind("/tmp",0)==0;
+    auto fat = find_fat_by_pid(pid, g_exec_index, em);
+    if (!fat || !fat->meta.cwd) return false;
+    return fat->meta.cwd->rfind("/tmp", 0) == 0;
 }
+
 inline bool rule_k8s_token(Pid pid,const PidMap&,const ExecMap&,AuxState& a)
-{
-    return a.k8s_token_read.contains(pid);   // заполнится FileOpen-event
-}
+{ return a.k8s_token_read(pid); }
+
 inline bool rule_ip_fanout(Pid pid,const PidMap&,const ExecMap&,AuxState& a)
-{
-    return a.ip_fanout(pid) > FANOUT_THR;    // sliding window
-}
+{ return a.ip_fanout(pid) > FANOUT_THR; }
+
 inline bool rule_sysfile_rewrite(Pid pid,const PidMap&,const ExecMap&,AuxState& a)
+{ return a.sys_write_to_etc(pid); }
+
+inline bool rule_tmpdir_exec(Pid pid,const PidMap&, const ExecMap& em,AuxState&)
 {
-    return a.sys_write_to_etc(pid);
+    auto fat = find_fat_by_pid(pid, g_exec_index, em);
+    if (!fat || !fat->meta.binary) return false;
+    return fat->meta.binary->rfind("/tmp", 0) == 0;
 }
-inline bool rule_tmpdir_exec(Pid pid,const PidMap&,const ExecMap& e,AuxState&)
-{
-    auto it=e.find_by_pid(pid);
-    return it && it->second->meta.binary
-           && it->second->meta.binary->rfind("/tmp",0)==0;
-}
+
 inline bool rule_mass777(Pid pid,const PidMap&,const ExecMap&,AuxState& a)
-{
-    return a.chmod_777_count(pid) > 5;
-}
+{ return a.chmod_777_count(pid) > 5; }
+
 inline bool rule_suid_root(Pid pid,const PidMap&,const ExecMap&,AuxState& a)
-{
-    return a.chmod_suid(pid);
-}
+{ return a.chmod_suid(pid); }
+
 inline bool rule_container_escape(Pid pid,const PidMap& l,const ExecMap&,AuxState&)
 {
     auto it=l.find(pid);
@@ -85,39 +74,37 @@ inline bool rule_container_escape(Pid pid,const PidMap& l,const ExecMap&,AuxStat
     Pid ppid=it->second.ppid;
     auto par=l.find(ppid);
     return par!=l.end() &&
-           par->second.docker_id.has_value() &&
-           !it->second.docker_id.has_value();
+           par->second.docker_id.has_value() &&        // parent в контейнере
+           !it->second.docker_id.has_value();          // child хостовой
 }
 
-/*-------------------------------------------------------------
-  Контейнеры правил для двух потоков
-  -------------------------------------------------------------*/
-constexpr std::array<DetectFn*,3> DETECT_LITE = {
-    rule_orphan,
-    rule_ip_fanout,
-    rule_container_escape
-};
-constexpr std::array<DetectFn*,7> DETECT_DEEP = {
-    rule_reverse_shell,
-    rule_download_exec,
-    rule_k8s_token,
-    rule_sysfile_rewrite,
-    rule_tmpdir_exec,
-    rule_mass777,
-    rule_suid_root
-};
+/* ---------- массивы правил ---------- */
+using DetectPair = std::pair<DetectFn*, RuleId>;
 
-/*-------------------------------------------------------------
-  Функция смены флага у заражённого процесса и BFS-раскраска
-  -------------------------------------------------------------*/
-inline void apply_risk_flag(Pid root, PidMap& lite)
+constexpr std::array<DetectPair,3> DETECT_LITE {{
+    {rule_orphan,           RuleId::Orphan},
+    {rule_ip_fanout,        RuleId::IpFanout},
+    {rule_container_escape, RuleId::ContainerEscape}
+}};
+constexpr std::array<DetectPair,7> DETECT_DEEP {{
+    {rule_reverse_shell,    RuleId::ReverseShell},
+    {rule_download_exec,    RuleId::DownloadExec},
+    {rule_k8s_token,        RuleId::K8sTokenRead},
+    {rule_sysfile_rewrite,  RuleId::SysFileRewrite},
+    {rule_tmpdir_exec,      RuleId::TempDirExec},
+    {rule_mass777,          RuleId::Mass777},
+    {rule_suid_root,        RuleId::SuidRoot}
+}};
+
+
+void bfs_propagate_risk(Pid root, PidMap& lite);
+
+inline void apply_risk_flag(Pid root, RuleId id, PidMap& lite)
 {
     auto it = lite.find(root);
     if(it==lite.end()) return;
-    if(it->second.flag.load() < Flag::Compromised)
-        it->second.flag.store(Flag::Compromised);
-    bfs_propagate_risk(root, lite);      // см. прототип ниже
+    it->second.flag.store(Flag::Compromised, std::memory_order_relaxed);
+    it->second.rule_bits.fetch_or(1u << uint8_t(id),
+                                  std::memory_order_relaxed);
+    bfs_propagate_risk(root, lite);
 }
-
-/*  Прототип: lock-per-step BFS, объявлен, но реализуется в .cpp  */
-void bfs_propagate_risk(Pid root, PidMap& lite);

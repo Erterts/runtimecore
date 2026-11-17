@@ -26,6 +26,11 @@ enum class EventKind : uint8_t {
     Unknown
 };
 
+enum class RuleId : uint8_t {           
+    ReverseShell, Orphan, DownloadExec, K8sTokenRead,
+    IpFanout, SysFileRewrite, TempDirExec,
+    Mass777, SuidRoot, ContainerEscape
+};
 /* ---------- флаги безопасности ------------------------------------*/
 enum class Flag : uint8_t {
     Clean,
@@ -49,6 +54,7 @@ struct LiteInfo {
     int64_t                    ts{};
     ExecId   exec_id;
     std::atomic<Flag>          flag{Flag::Clean};
+    std::atomic<uint16_t> rule_bits {0}; // какие правила сработали
     std::optional<ContainerId> docker_id;   // host == std::nullopt
     std::optional<uint32_t>    uid;         // может отсутствовать у net/file
     EventKind                  kind = EventKind::ProcExec;

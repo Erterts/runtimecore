@@ -247,12 +247,16 @@ private:
    4.  Вспомогательная функция: найти FatInfo по pid
        (используется в deep-правилах)
    -------------------------------------------------------------*/
-inline FatPtr find_by_pid(const ExecMap& emap, const ExecIndex& idx, Pid pid) noexcept
+
+inline std::shared_ptr<FatInfo>
+find_fat_by_pid(Pid pid,
+                const ExecIndex& idx,
+                const ExecMap&   emap) noexcept
 {
     const ExecId* ex = idx.find_exec(pid);
     if (!ex) return nullptr;
     auto it = emap.find(*ex);
-    return it==emap.end()? nullptr : it->second;
+    return it == emap.end() ? nullptr : it->second;
 }
 /* -------------------------------------------------------------
    5.  Вспомогательная функция: найти заполнить вектор дочерних процессов для ускорения BFS
