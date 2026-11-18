@@ -10,12 +10,14 @@
 #include <cstdint>
 #include "graph_struct.hpp"
 #include "detect_state.hpp"      // AuxState и sliding-windows
+#include "json_io.hpp"
 
 /* ---------- локальные константы ---------------------------- */
 inline constexpr int FANOUT_THR = 8;      // порог IP-fanout (#5)
 
 
 using DetectFn = bool(Pid, const PidMap&, const ExecMap&, AuxState&);
+extern ExecIndex g_exec_index;
 
 
 

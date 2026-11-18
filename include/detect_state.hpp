@@ -10,12 +10,26 @@
 constexpr int64_t FANOUT_WINDOW_MS   = 5'000;   // правило #5
 constexpr int64_t FILE_WINDOW_MS     = 10'000;  // 4,6,8,9
 
+/* =========  Адаптируем std::string_view под C++23 ============*/
+struct StringViewHash {
+    using is_transparent = void;                       // ← ключ
+
+    std::size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+    std::size_t operator()(const std::string& s) const noexcept {
+        return std::hash<std::string_view>{}(s);
+    }
+    std::size_t operator()(const char* s) const noexcept {
+        return std::hash<std::string_view>{}(s);
+    }
+};
 /* ===================== вспомогательные ===================== */
 template<std::size_t N>
 struct RingSet {
     /*  Хранит не более N уникальных строк (IP или path).       */
     bool insert(std::string_view s) {
-        if (set_.count(s)) return false;
+        if (set_.contains(s)) return false;
         if (set_.size() == N) {          // вытеснение FIFO
             set_.erase(order_.front());
             order_.pop_front();
@@ -27,7 +41,10 @@ struct RingSet {
     std::size_t size() const noexcept { return set_.size(); }
 private:
     std::deque<std::string>            order_;
-    std::unordered_set<std::string>    set_;
+     std::unordered_set<
+        std::string,             // key_type
+        StringViewHash,          // hash (C++23)
+        std::equal_to<>> set_;   // transparent comparator
 };
 
 /* ===================== AuxState ============================ */

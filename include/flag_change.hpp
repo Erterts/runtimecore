@@ -36,3 +36,4 @@ public:
 private:
     std::array<std::vector<Pid>, WHEEL_BUCKETS> wheel_;
 };
+bool upsert_lite(const LiteInfo&, PidMap&);

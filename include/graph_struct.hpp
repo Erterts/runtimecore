@@ -60,6 +60,36 @@ struct LiteInfo {
     std::optional<ContainerId> docker_id;   // host == std::nullopt
     std::optional<uint32_t>    uid;         // может отсутствовать у net/file
     EventKind                  kind = EventKind::ProcExec;
+    LiteInfo() = default;
+
+    /* копирующий конструктор */
+    LiteInfo(const LiteInfo& rhs) noexcept
+        : pid(rhs.pid), ppid(rhs.ppid), gppid(rhs.gppid),
+          ts(rhs.ts), exec_id(rhs.exec_id),
+          flag(rhs.flag.load(std::memory_order_relaxed)),
+          docker_id(rhs.docker_id),
+          uid(rhs.uid),
+          rule_bits(rhs.rule_bits.load(std::memory_order_relaxed)),
+          kind(rhs.kind)
+    {}
+
+    LiteInfo& operator=(const LiteInfo& rhs) noexcept
+    {
+        pid  = rhs.pid;  ppid  = rhs.ppid;  gppid = rhs.gppid;
+        ts   = rhs.ts;   exec_id = rhs.exec_id;
+        flag.store(rhs.flag.load(std::memory_order_relaxed),
+                   std::memory_order_relaxed);
+        docker_id = rhs.docker_id;
+        uid       = rhs.uid;
+        rule_bits.store(rhs.rule_bits.load(std::memory_order_relaxed),
+                        std::memory_order_relaxed);
+        kind = rhs.kind;
+        return *this;
+    }
+
+    /* перемещения можно оставить тривиальными */
+    LiteInfo(LiteInfo&&) noexcept            = default;
+    LiteInfo& operator=(LiteInfo&&) noexcept = default;
 };
 /* ---------- FatInfo  (метаданные процесса) -------------------------*/
 struct ExecMeta {
@@ -102,7 +132,7 @@ using ExecMap = boost::unordered_flat_map<
                                   std::shared_ptr<FatInfo>>>>;
 
 /* ---------- фабрика ExecId из 64-символьной hex-строки -------------*/
-ExecId make_exec_id(std::string_view hex);   
+ExecId make_exec_id(std::string_view hex) noexcept;   
 inline Pid make_superroot(const std::string& cid, int64_t ts,PidMap& lite)
 {
     /* отрицательный PID на основе хеша CID */

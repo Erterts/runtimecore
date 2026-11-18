@@ -36,7 +36,7 @@ bool DeltaCache::flush_if_needed(int64_t now_ms, std::string& out)
 
     /* ── собираем лёгкий контейнер и сериализуем ────────── */
     Delta d{now_ms, adds_, upds_};     // Delta = простой struct {ts, adds, upds}
-    je::to_delta(d, json_out);         // <<< главный вызов
+    je::to_delta(d, out);         // <<< главный вызов
 
     /* ── обнуляем буферы ────────────────────────────────── */
     adds_.clear();

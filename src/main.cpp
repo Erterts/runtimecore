@@ -13,20 +13,19 @@
 #include "snapshot.hpp"
 #include "ns_shutdown.hpp"
 #include "flag_change.hpp"
-#include "upsert_lite.cpp"
 #include "detect_state.hpp"
 #include "tmpfs.hpp"
 #include "simdjson.h"
 
 // ─── глобальные контейнеры ─────────────────────────────────────────
 
-static ExecIndex      g_exec_index;
+ExecIndex      g_exec_index;
 static AuxState g_aux;
 static DeltaCache     g_delta;
 static SnapshotRing<> g_ring;
-static StubWheel      g_wheel;
+StubWheel      g_wheel;
 // ─── мьютексы для карт (reader/writer) ─────────────────────────────
-static std::shared_mutex g_pid_mtx;
+ std::shared_mutex g_pid_mtx;
 static std::shared_mutex g_exec_mtx;
 
 // ───  очереди  ─────────────────────────────────────────────────────
@@ -44,21 +43,7 @@ std::queue<Pid>                q_det;
 // ─── массивы правил ────────────────────────────────────────────────
 using DetectPair = std::pair<DetectFn*, RuleId>;
 
-constexpr std::array<DetectPair,3> DETECT_LITE = {{
-    {rule_orphan,        RuleId::Orphan},
-    {rule_ip_fanout,     RuleId::IpFanout},
-    {rule_container_escape, RuleId::ContainerEscape}
-}};
 
-constexpr std::array<DetectPair,7> DETECT_DEEP = {{
-    {rule_reverse_shell,   RuleId::ReverseShell},
-    {rule_download_exec,   RuleId::DownloadExec},
-    {rule_k8s_token,       RuleId::K8sTokenRead},
-    {rule_sysfile_rewrite, RuleId::SysFileRewrite},
-    {rule_tmpdir_exec,     RuleId::TempDirExec},
-    {rule_mass777,         RuleId::Mass777},
-    {rule_suid_root,       RuleId::SuidRoot}
-}};
 // ─── worker 1: Heavy JSON → FatInfo → очередь detect  ──────────────
 void heavy_parser_worker()
 {
@@ -135,6 +120,7 @@ void detect_worker()
 }
 
 // ───  main-thread : Lite-парсинг, быстрые правила, формирования вывода  ─────────
+#ifndef CATCH_CONFIG_MAIN
 int main()
 {   init_io_paths();
     using clk = std::chrono::steady_clock;
@@ -194,3 +180,4 @@ int main()
     detect.join();
     return 0;
 }
+#endif

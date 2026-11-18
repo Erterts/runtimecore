@@ -1,3 +1,4 @@
+
 cmake_minimum_required(VERSION 3.15)
 project(runtimecore CXX)
 
@@ -18,7 +19,6 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
-
 FetchContent_Declare(
     simdjson
     URL https://github.com/simdjson/simdjson/archive/refs/tags/v5.1.1.tar.gz
@@ -32,22 +32,42 @@ FetchContent_Declare(
     SOURCE_SUBDIR non_existent_dir
 )
 
-
-
-FetchContent_MakeAvailable(Boost simdjson rapidjson)
-
-add_executable(${PROJECT_NAME} 
-    src/main.cpp
-    include/cr_check.cpp
+# Catch2 v2.13.10 (последняя header-only версия из ветки v2)
+FetchContent_Declare(
+    Catch2
+    URL https://github.com/catchorg/Catch2/archive/refs/tags/v2.13.10.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR non_existent_dir
 )
 
-# Подключаем вашу папку include и заголовки скачанного rapidjson
+FetchContent_MakeAvailable(Boost simdjson rapidjson Catch2)
+
+# Собираем общие исходные файлы
+set(PROJECT_SOURCES
+    src/main.cpp
+    include/delta_cache.cpp
+    include/detect.cpp
+    include/helpers.cpp
+    include/snapshot.cpp
+    include/upsert_lite.cpp
+)
+
+# Подключаем платформозависимую реализацию tmpfs
+if(WIN32)
+    list(APPEND PROJECT_SOURCES include/tmpfs_win.cpp)
+elseif(UNIX)
+    list(APPEND PROJECT_SOURCES include/tmpfs_linux.cpp)
+endif()
+
+add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+
+# Подключаем вашу папку include и заголовки header-only библиотек (rapidjson и Catch2)
 target_include_directories(${PROJECT_NAME} PRIVATE 
     include
     ${rapidjson_SOURCE_DIR}/include
+    ${catch2_SOURCE_DIR}/single_include
 )
 
-# Убираем rapidjson из target_link_libraries, так как он подключен как header-only выше
 target_link_libraries(${PROJECT_NAME} PRIVATE 
     Boost::unordered 
     simdjson
