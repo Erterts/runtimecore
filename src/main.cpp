@@ -17,10 +17,6 @@
 #include "detect_state.hpp"
 #include "tmpfs.hpp"
 #include "simdjson.h"
-// ─── заглушки (реализуем потом) ────────────────────────────────────
-std::string read_raw();                        // tmpfs reader
-Event       make_event(const LiteInfo&);
-void        write_to_tmpfs(const char*, const std::string&);
 
 // ─── глобальные контейнеры ─────────────────────────────────────────
 
@@ -162,7 +158,7 @@ int main()
 
         LiteInfo lite;
         if (!jp::parse_lite(raw, lite))   continue;     // ошибка → drop
-        upsert_lite(lite, g_pid_map);
+        bool inserted = upsert_lite(lite, g_pid_map);
 
         /* быстрая проверка правил */
         for (auto [fn, id] : DETECT_LITE)
@@ -175,7 +171,7 @@ int main()
         q_json_cv.notify_one();
 
         /* регистрируем событие для формирование дельты */
-        g_delta.register_event(make_event(lite));
+        g_delta.register_event(make_event(lite,inserted));
         /* проверяем, дошёл ли лог родительского процесса */
         int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
                           clk::now().time_since_epoch()).count();

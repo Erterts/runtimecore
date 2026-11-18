@@ -17,18 +17,19 @@
 */
 
 /* ---------------- вспомогательные структуры ---------------- */
-struct NodeAdd { Pid id; Pid ppid; Flag flag; };
-struct NodeUpd { Pid id;          Flag flag; };
+struct NodeAdd { Pid id; Pid ppid; Flag flag; uint16_t rules; };
+struct NodeUpd { Pid id;          Flag flag; uint16_t rules; };
 
 struct Event
 {
-    enum class Kind { Add, Upd } kind;  // «Del» больше нет
+    enum class Kind { Add, Upd } kind;  
     Pid      id;
     Pid      ppid{0};   // meaningful only for Add
     Flag     flag;
     uint16_t rules;
     int64_t  ts;
 };
+Event make_event(const LiteInfo&, bool in_new) noexcept; 
 
 /* ---------------- класс кэша -------------------------------- */
 class DeltaCache
@@ -46,7 +47,11 @@ public:
 private:
     int64_t last_flush_ms_ = 0;
     int     period_ms_     = 100;
-
     std::vector<NodeAdd> adds_;
     std::vector<NodeUpd> upds_;
+};
+struct Delta {
+    int64_t                    ts;
+    const std::vector<NodeAdd>& adds;
+    const std::vector<NodeUpd>& upds;
 };

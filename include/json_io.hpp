@@ -95,6 +95,11 @@ static int64_t parse_iso8601_ns(std::string_view s) noexcept {
     const int64_t secs = days * 86400 + hh * 3600 + mm * 60 + ss - tz_off;
     return secs * 1'000'000'000 + frac_ns;
  }
+
+
+
+
+
 /* -------------------------------------------------------------
    2.  Пространства имён
    -------------------------------------------------------------*/
@@ -213,7 +218,41 @@ namespace jp      // json → pkt/graph
 
 namespace je      // graph → rapidjson string
 {
-    //void to_delta   (const Delta&      d, std::string& out) noexcept;
+    void to_delta(const Delta& d, std::string& out) noexcept
+{
+    rapidjson::StringBuffer sb;
+    rapidjson::Writer<rapidjson::StringBuffer> w(sb);
+
+    w.StartObject();
+    w.Key("_ts"); w.Int64(d.ts);
+
+    if (!d.adds.empty()) {
+        w.Key("add"); w.StartArray();
+        for (const auto& n : d.adds) {
+            w.StartObject();
+            w.Key("id");   w.Int(n.id);
+            w.Key("ppid"); w.Int(n.ppid);
+            w.Key("flag"); w.Int(int(n.flag));
+            w.Key("r");    w.Uint(n.rules);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+    if (!d.upds.empty()) {
+        w.Key("upd"); w.StartArray();
+        for (const auto& n : d.upds) {
+            w.StartObject();
+            w.Key("id");   w.Int(n.id);
+            w.Key("flag"); w.Int(int(n.flag));
+            w.Key("r");    w.Uint(n.rules);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+    w.EndObject();
+
+    out.assign(sb.GetString(), sb.GetSize());
+}
     //void to_snapshot(const PidMap& g,   std::string& out) noexcept;
 } // namespace je
 
