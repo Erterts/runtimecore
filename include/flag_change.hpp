@@ -1,6 +1,4 @@
-//==============================================================
-//  sweep_buckets.h   –  timing-wheel, 256 бакетов × 20 мс
-//==============================================================
+
 #pragma once
 #include <array>
 #include <vector>
@@ -8,13 +6,13 @@
 #include "graph_struct.hpp"
 
 /*  Константы таймера  */
-constexpr int   WHEEL_BUCKETS   = 256;   // 2^8 – удобный модуль
+constexpr int   WHEEL_BUCKETS   = 256;   // 2^8 
 constexpr int64_t BUCKET_STEP_MS = 20;   // 256*20 = 5120 ≈ STUB_LAG_MS(5000)
 
 /*  Класс-обёртка  */
 class StubWheel {
 public:
-    /*  schedule(pid, now) – кладём pid в “текущий + delay”  */
+    
     void schedule(Pid pid, int64_t now_ms)
     {
         std::size_t slot = ((now_ms / BUCKET_STEP_MS) +  WHEEL_BUCKETS - 1) & (WHEEL_BUCKETS-1);

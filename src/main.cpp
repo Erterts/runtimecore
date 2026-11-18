@@ -40,10 +40,7 @@ std::mutex                     q_det_m;
 std::condition_variable        q_det_cv;
 std::queue<Pid>                q_det;
 
-// ─── массивы правил ────────────────────────────────────────────────
 using DetectPair = std::pair<DetectFn*, RuleId>;
-
-
 // ─── worker 1: Heavy JSON → FatInfo → очередь detect  ──────────────
 void heavy_parser_worker()
 {
@@ -69,7 +66,7 @@ void heavy_parser_worker()
         /* Pid ребёнка уже известен в LitePkt => кладём в detect-очередь */
         {
             std::lock_guard lg(q_det_m);
-            q_det.push(job.pid);               // exec_id==pid в текущем логе благодаря двусторонней связи
+            q_det.push(job.pid);               
         }
         q_det_cv.notify_one();
     }
@@ -119,7 +116,7 @@ void detect_worker()
     }
 }
 
-// ───  main-thread : Lite-парсинг, быстрые правила, формирования вывода  ─────────
+// ───  main-поток: Lite-парсинг, быстрые правила, формирование вывода  ─────────
 #ifndef CATCH_CONFIG_MAIN
 int main()
 {   init_io_paths();
@@ -139,14 +136,12 @@ int main()
         if (!shutdown::running) break;
         if (raw.empty()) continue;
 
-        //auto crc = fletcher32(std::as_bytes(std::span{raw.data(), raw.size()})); - не нужно, в логах нет контрольной суммы, целостность даёт сам runtime radar
         if(!fast_json_validate(raw.data(), raw.size())) continue;
-
         LiteInfo lite;
         if (!jp::parse_lite(raw, lite))   continue;     // ошибка → drop
         bool inserted = upsert_lite(lite, g_pid_map);
 
-        /* быстрая проверка правил */
+        /* быстрая проверка правил, доступных через LiteInfo */
         for (auto [fn, id] : DETECT_LITE)
         if (fn(lite.pid, g_pid_map, g_exec_map, g_aux)) apply_risk_flag(lite.pid, id, g_pid_map);
         /* кладём JSON тяжёлому парсеру */

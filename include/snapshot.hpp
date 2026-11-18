@@ -15,7 +15,7 @@
 #define RING_SIZE 150          // по умолчанию 5 мин при шаге 2 с
 #endif
 
-using LiteGraph = PidMap;      // alias, чтобы не плодить template-параметры
+using LiteGraph = PidMap;      
 
 template<std::size_t N = RING_SIZE>
 class SnapshotRing

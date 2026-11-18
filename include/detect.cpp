@@ -1,11 +1,9 @@
-//==============================================================
-//  detect.cpp   –  реализация bfs_propagate_risk()
-//==============================================================
+
 #include "detect.hpp"
 #include <queue>
 #include <shared_mutex>
 
-/*  В main.cpp объявлен тот же мьютекс; здесь лишь extern */
+
 extern std::shared_mutex g_pid_mtx;
 
 /* -------------------------------------------------------------
@@ -21,7 +19,7 @@ void bfs_propagate_risk(Pid root, PidMap& lite)
     {
         Pid cur = q.front(); q.pop();
 
-        /* ---- короткая критическая секция: читаем + обновляем ---- */
+
         LiteInfo* info = nullptr;
         {
             std::shared_lock rl(g_pid_mtx);          // ≈ 0.5–1 µs
@@ -35,8 +33,8 @@ void bfs_propagate_risk(Pid root, PidMap& lite)
             if (old < Flag::InRisk)
                 info->flag.store(Flag::InRisk, std::memory_order_relaxed);
 
-            /* собираем потомков в локальный буфер */
-            for (const auto& kv : lite)              // bucket-iterate
+            
+            for (const auto& kv : lite)              
                 if (kv.second.ppid == cur)
                     q.push(kv.first);
         }

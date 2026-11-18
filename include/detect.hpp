@@ -1,6 +1,4 @@
-//==============================================================
-//  detect.h   (фрагмент – правки для успешной сборки)
-//==============================================================
+
 #pragma once
 #include <array>
 #include <unordered_map>
@@ -9,18 +7,13 @@
 #include <string>
 #include <cstdint>
 #include "graph_struct.hpp"
-#include "detect_state.hpp"      // AuxState и sliding-windows
+#include "detect_state.hpp"      
 #include "json_io.hpp"
 
-/* ---------- локальные константы ---------------------------- */
+
 inline constexpr int FANOUT_THR = 8;      // порог IP-fanout (#5)
-
-
 using DetectFn = bool(Pid, const PidMap&, const ExecMap&, AuxState&);
 extern ExecIndex g_exec_index;
-
-
-
 /* ================== INLINE-правила ========================= */
 
 inline bool rule_reverse_shell(Pid pid,const PidMap&, const ExecMap& em,AuxState& a)
@@ -99,7 +92,7 @@ constexpr std::array<DetectPair,7> DETECT_DEEP {{
 
 
 void bfs_propagate_risk(Pid root, PidMap& lite);
-
+/* ---------- расстановка флагов-------------*/
 inline void apply_risk_flag(Pid root, RuleId id, PidMap& lite)
 {
     auto it = lite.find(root);

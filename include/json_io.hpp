@@ -37,7 +37,7 @@ private:
 
 
 
-using FatPtr   = std::shared_ptr<FatInfo>;        // тяжёлый результат
+using FatPtr   = std::shared_ptr<FatInfo>;        
 /* -------------------------------------------------------------
    1.  Вспомогательные функции
    -------------------------------------------------------------*/
@@ -47,7 +47,7 @@ inline bool fast_json_validate(const char* data, size_t len) noexcept // про�
     auto result = p.iterate(data, len, /*realloc_if_needed*/ false);
     return !result.error();          // true → JSON цел
 }
-static int64_t parse_iso8601_ns(std::string_view s) noexcept { 
+static int64_t parse_iso8601_ns(std::string_view s) noexcept {      //parse времени
      if (s.size() < 19) return 0;                       // YYYY-MM-DDTHH:MM:SS
 
     auto dig = [](char c) noexcept -> int {
@@ -140,7 +140,7 @@ static int64_t parse_iso8601_ns(std::string_view s) noexcept {
 namespace jp      // json → pkt/graph
 {
     /*  parse_lite : из raw-JSON достаём поля, нужные LiteInfo.
-        Если возникла ошибка синтаксиса – возвращаем std::nullopt.  */
+        Если возникла ошибка синтаксиса – возвращаем false.  */
     inline bool parse_lite(const simdjson::padded_string& raw,
                 LiteInfo& out) noexcept
 {
@@ -191,8 +191,6 @@ namespace jp      // json → pkt/graph
     return true;
 }
 
-
-    
 
     /*  parse_full : разбираем те же raw-данные глубоко, формируем FatInfo,
         заносим pid⇄exec в индекс.  Возвращаем {FatPtr, ok}.                 */
@@ -289,11 +287,6 @@ namespace je      // graph → rapidjson string
 }
     
 } // namespace je
-
-/* -------------------------------------------------------------
-   3.  Двусторонний ExecIndex     pid ⇄ exec_id
-   -------------------------------------------------------------*/
-
 
 /* -------------------------------------------------------------
    4.  Вспомогательная функция: найти FatInfo по pid

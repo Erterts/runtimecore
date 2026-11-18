@@ -1,6 +1,4 @@
-//==============================================================
-//  graph_struct.hpp  (с учётом только process_exec + event_type)
-//==============================================================
+
 #pragma once
 #include <array>
 #include <string>
@@ -19,13 +17,13 @@ using ContainerId = std::string;          // docker id / sha256 prefix
 using ExecId    = std::array<char,32>;    // sha256 (binary)
 inline std::unordered_set<std::string> containers;
 
-/* ---------- новый признак: из какого лога пришло событие -----------*/
+
 enum class EventKind : uint8_t {
-    ProcExec,     // пришёл из process_exec   (сейчас единственный)
+    ProcExec,     // пришёл из process_exec   
     NetEvent,     // будущий сетевой
-    FileOpen,
+    FileOpen,      //файловые взамодействия
     FileChmod,
-    Unknown
+    Unknown       //под будущее расширение
 };
 
 enum class RuleId : uint8_t {           
@@ -48,7 +46,7 @@ struct SuperRoot {
     int64_t     start_ts;
 };
 
-/* ---------- LiteInfo  (≈ 40 байт) ----------------------------------*/
+/* ---------- LiteInfo  для лёгкой топологии ----------------------------------*/
 struct LiteInfo {
     Pid pid;
     Pid                        ppid{};
@@ -87,7 +85,7 @@ struct LiteInfo {
         return *this;
     }
 
-    /* перемещения можно оставить тривиальными */
+    
     LiteInfo(LiteInfo&&) noexcept            = default;
     LiteInfo& operator=(LiteInfo&&) noexcept = default;
 };
@@ -133,9 +131,10 @@ using ExecMap = boost::unordered_flat_map<
 
 /* ---------- фабрика ExecId из 64-символьной hex-строки -------------*/
 ExecId make_exec_id(std::string_view hex) noexcept;   
+/* ----------привязка к виртуальному суперкорню по id контейнера-------------*/
 inline Pid make_superroot(const std::string& cid, int64_t ts,PidMap& lite)
 {
-    /* отрицательный PID на основе хеша CID */
+    /* отрицательный PID на основе хеша CID во избежание повторений*/
     Pid super_pid = -static_cast<Pid>(std::hash<std::string>{}(cid));
 
     /* если уже есть — возвращаем прежний */
