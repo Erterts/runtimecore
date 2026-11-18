@@ -36,8 +36,10 @@ bool upsert_lite(const LiteInfo& pkt, PidMap& map)
     node.gppid = pkt.gppid;
     node.ts    = pkt.ts;
     node.kind  = pkt.kind;             // в process_exec = ProcExec
-    if (pkt.docker_id)                 // host ⇒ std::nullopt
-        node.docker_id = pkt.docker_id;
+    if (pkt.docker_id)    {             // host ⇒ std::nullopt
+         Pid super = make_superroot(*pkt.docker_id, pkt.ts, map);
+            if (pkt.ppid == 0)  node.ppid = super;           // подвешиваем к суперкорню
+    }
 
     /*    Если мы пришли на место Stub’а → снимаем LAG-флаг.       */
     if (node.flag == Flag::TEMP_LAGGING)

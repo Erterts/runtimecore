@@ -11,11 +11,13 @@
 #include <cstdint>
 #include <boost/unordered/unordered_node_map.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <unordered_set>
 #include <memory_resource>
 
 using Pid       = int32_t;
 using ContainerId = std::string;          // docker id / sha256 prefix
 using ExecId    = std::array<char,32>;    // sha256 (binary)
+inline std::unordered_set<std::string> containers;
 
 /* ---------- новый признак: из какого лога пришло событие -----------*/
 enum class EventKind : uint8_t {
@@ -100,4 +102,24 @@ using ExecMap = boost::unordered_flat_map<
                                   std::shared_ptr<FatInfo>>>>;
 
 /* ---------- фабрика ExecId из 64-символьной hex-строки -------------*/
-ExecId make_exec_id(std::string_view hex);   // реализуется в json_io.cpp
+ExecId make_exec_id(std::string_view hex);   
+inline Pid make_superroot(const std::string& cid, int64_t ts,PidMap& lite)
+{
+    /* отрицательный PID на основе хеша CID */
+    Pid super_pid = -static_cast<Pid>(std::hash<std::string>{}(cid));
+
+    /* если уже есть — возвращаем прежний */
+    if (lite.find(super_pid) != lite.end()) return super_pid;
+
+    LiteInfo root{};
+    root.pid        = super_pid;
+    root.ppid       = 0;
+    root.ts         = ts;
+    root.docker_id  = cid;
+    root.flag.store(Flag::Clean);
+    root.kind       = EventKind::ProcExec;
+
+    lite.emplace(super_pid, std::move(root));
+    containers.insert(cid);
+    return super_pid;
+}
