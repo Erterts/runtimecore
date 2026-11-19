@@ -2,12 +2,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(runtimecore CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+# Ставим стандарт C++23, как в вашей инструкции
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Разрешаем CMake 4+ собирать старые зависимости вроде RapidJSON v1.1.0
 set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
-
 include(FetchContent)
 
 set(BOOST_ENABLE_CMAKE ON)
@@ -40,11 +39,11 @@ FetchContent_Declare(
     SOURCE_SUBDIR non_existent_dir
 )
 
+
 FetchContent_MakeAvailable(Boost simdjson rapidjson Catch2)
 
-# Собираем общие исходные файлы
-set(PROJECT_SOURCES
-    src/main.cpp
+# Общие модули логики (используются и в программе, и в тестах)
+set(CORE_LOGIC_SOURCES
     include/delta_cache.cpp
     include/detect.cpp
     include/helpers.cpp
@@ -52,27 +51,34 @@ set(PROJECT_SOURCES
     include/upsert_lite.cpp
 )
 
-# Подключаем платформозависимую реализацию tmpfs
 if(WIN32)
-    list(APPEND PROJECT_SOURCES include/tmpfs_win.cpp)
+    list(APPEND CORE_LOGIC_SOURCES include/tmpfs_win.cpp)
 elseif(UNIX)
-    list(APPEND PROJECT_SOURCES include/tmpfs_linux.cpp)
+    list(APPEND CORE_LOGIC_SOURCES include/tmpfs_linux.cpp)
 endif()
 
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+# --------------------------------------------------------------------
+# 1. ОСНОВНАЯ ПРОГРАММА (runtimecore.exe)
+# --------------------------------------------------------------------
+add_executable(${PROJECT_NAME} src/main.cpp ${CORE_LOGIC_SOURCES})
 
-# Подключаем вашу папку include и заголовки header-only библиотек (rapidjson и Catch2)
 target_include_directories(${PROJECT_NAME} PRIVATE 
     include
+    ${rapidjson_SOURCE_DIR}/include
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE Boost::unordered simdjson)
+
+# --------------------------------------------------------------------
+# 2. ЮНИТ-ТЕСТЫ (run_tests.exe)
+# --------------------------------------------------------------------
+add_executable(run_tests tests/testcode.cpp ${CORE_LOGIC_SOURCES})
+
+target_include_directories(run_tests PRIVATE 
+    include
+    src
     ${rapidjson_SOURCE_DIR}/include
     ${catch2_SOURCE_DIR}/single_include
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE 
-    Boost::unordered 
-    simdjson
-)
-
-if(UNIX AND NOT APPLE)
-    target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++)
-endif()
+target_link_libraries(run_tests PRIVATE Boost::unordered simdjson)

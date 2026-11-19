@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <memory_resource>
 
+
 using Pid       = int32_t;
 using ContainerId = std::string;          // docker id / sha256 prefix
 using ExecId    = std::array<char,32>;    // sha256 (binary)
@@ -91,18 +92,23 @@ struct LiteInfo {
 };
 /* ---------- FatInfo  (метаданные процесса) -------------------------*/
 struct ExecMeta {
-    std::optional<std::string> binary;
-    std::optional<std::string> arguments;
-    std::optional<std::string> cwd;
-    std::optional<uint32_t>    uid;
-    std::optional<uint32_t>    gid;
-    std::vector<std::string>   caps;       // empty if field missing
-    uint64_t                   ns_pid{};   // всегда есть
+    std::pmr::string              binary;
+    std::pmr::string              arguments;
+    std::pmr::string              cwd;
+    std::optional<uint32_t>       uid;
+    std::optional<uint32_t>       gid;
+    std::pmr::vector<std::pmr::string> caps;
+    uint64_t                      ns_pid{};
+
+    /* конструктор, чтобы все pmr‐поля	сразу получили нужный ресурс */
+    explicit ExecMeta(std::pmr::memory_resource* r)
+      : binary(r), arguments(r), cwd(r), caps(r) {}
 };
 struct FatInfo {
     ExecMeta meta;
-    std::vector<Pid>             child_pids;
+    std::pmr::vector<Pid> child_pids;
     EventKind                    kind = EventKind::ProcExec;
+    explicit FatInfo(std::pmr::memory_resource* r) : meta(r), child_pids(PMR<Pid>{r}) {}
 };
 
 /* ---------- кастомный хешер ExecId ---------------------------------*/

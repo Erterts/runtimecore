@@ -11,19 +11,16 @@ constexpr int64_t FANOUT_WINDOW_MS   = 5'000;   // правило #5
 constexpr int64_t FILE_WINDOW_MS     = 10'000;  // 4,6,8,9
 
 /* =========  Адаптируем std::string_view под C++23 ============*/
-struct StringViewHash {
-    using is_transparent = void;                       // ← ключ
-
-    std::size_t operator()(std::string_view sv) const noexcept {
-        return std::hash<std::string_view>{}(sv);
-    }
-    std::size_t operator()(const std::string& s) const noexcept {
-        return std::hash<std::string_view>{}(s);
-    }
-    std::size_t operator()(const char* s) const noexcept {
-        return std::hash<std::string_view>{}(s);
-    }
+struct StringViewHash {                  //     << new >>
+    using is_transparent = void;
+    std::size_t operator()(std::string_view sv) const noexcept
+          { return std::hash<std::string_view>{}(sv); }
+    std::size_t operator()(const std::string& s) const noexcept
+          { return std::hash<std::string_view>{}(s); }
+    std::size_t operator()(const char* s) const noexcept
+          { return std::hash<std::string_view>{}(s); }
 };
+     
 /* ===================== вспомогательные ===================== */
 template<std::size_t N>
 struct RingSet {
@@ -41,10 +38,7 @@ struct RingSet {
     std::size_t size() const noexcept { return set_.size(); }
 private:
     std::deque<std::string>            order_;
-     std::unordered_set<
-        std::string,             // key_type
-        StringViewHash,          // hash (C++23)
-        std::equal_to<>> set_;   // transparent comparator
+    std::unordered_set<std::string,StringViewHash,std::equal_to<>> set_;
 };
 
 /* ===================== AuxState ============================ */

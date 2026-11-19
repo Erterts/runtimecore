@@ -4,7 +4,7 @@
 #include <rapidjson/writer.h>    // export
 #include "graph_struct.hpp"
 #include "delta_cache.hpp"
-
+#include "globals.hpp"
 class ExecIndex {
 public:
     /* true  – вставлено успешно или уже было то же самое exec_id
@@ -33,7 +33,10 @@ private:
 };
 
 
+extern std::pmr::monotonic_buffer_resource arena_fat;   
 
+auto fat_ptr = std::allocate_shared<FatInfo>(
+                  PMR<FatInfo>{ &arena_fat }, &arena_fat); 
 
 
 

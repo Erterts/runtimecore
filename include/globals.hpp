@@ -1,6 +1,4 @@
-//==============================================================
-//  globals.hpp   –  корректная инициализация карт с PMR-ареной
-//==============================================================
+
 #pragma once
 #include <memory_resource>
 #include <functional>
@@ -11,27 +9,23 @@
        • 8 МБ достаточно, чтобы держать ~200 k процессов +
          10 k FatInfo без фрагментации.
    ------------------------------------------------------------------*/
-inline std::pmr::monotonic_buffer_resource arena{ 8 * 1024 * 1024 };
+inline std::pmr::monotonic_buffer_resource arena_lite{2 * 1024 * 1024};
+inline std::pmr::monotonic_buffer_resource arena_fat {6 * 1024 * 1024};
 
-/* ------------------------------------------------------------------
-   2.  Конструкторы boost::unordered_* выглядят так:
-       map(bucket_count, hash, equal, allocator)
-   ------------------------------------------------------------------*/
 inline PidMap g_pid_map{
-        1024,                                // начальное число бакетов
-        std::hash<Pid>{}, std::equal_to<>(),
-        PMR<std::pair<const Pid, LiteInfo>>{ &arena }   // allocator
+        1024, std::hash<Pid>{}, std::equal_to<>(),
+        PMR<std::pair<const Pid, LiteInfo>>{ &arena_lite }
 };
 
 inline ExecMap g_exec_map{
-        1024,
-        ExecHash{}, std::equal_to<>(),
-        PMR<std::pair<const ExecId, std::shared_ptr<FatInfo>>>{ &arena }
+        1024, ExecHash{}, std::equal_to<>(),
+        PMR<std::pair<const ExecId, std::shared_ptr<FatInfo>>>{ &arena_fat }
 };
 
 /*  Теперь все выделения памяти внутри карт идут через `arena`,
     →  0 malloc/free на горячем пути,
-    →  15–20 % экономии RSS и немного быстрее rehash.               */
+    →  15–20 % экономии RSS и немного быстрее rehash.
+    →   решена проблема гонки данных, выделение памяти под LiteInfo и FatInfo идёт через разные arena              */
 namespace config{
     /* ----------- тайминги основного конвейера ---------------- */
     inline constexpr int   DELTA_PERIOD_MS      = 100;     // flush Δ каждые 100 мс
