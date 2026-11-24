@@ -78,5 +78,24 @@ mkdir C:\dev\radar\shm -Force
 New-Item -Path "\$env:RR_SHM\tetragon.log" -ItemType File -Force
 
 .\build\runtimecore.exe
+
+
+# В случае, если не заданы переменные окружения в сессии, или происходят неизвестные ошибки:
+
+# 1. Задаём единую переменную пути и создаём папку-эмулятор tmpfs
+$shmDir = "C:\dev\runtimecore\shm"
+New-Item -Path $shmDir -ItemType Directory -Force | Out-Null
+
+# 2. Прокидываем переменные окружения (совпадают с конфигом в tmpfs_win.cpp)
+$env:RR_IN_DIR  = $shmDir
+$env:RR_OUT_DIR = $shmDir
+$env:RR_IN_FILE = "tetragon.log"
+
+# 3. Создаём чистый пустой входной лог без BOM
+New-Item -Path "$shmDir\tetragon.log" -ItemType File -Force | Out-Null
+
+# 4. Запускаем скомпилированное ядро
+.\build\runtimecore.exe
+
 ```
 

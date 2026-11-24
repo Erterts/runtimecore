@@ -1,6 +1,7 @@
 #include "graph_struct.hpp"
 #include <cctype>
 
+
 static inline int hex_val(char c) noexcept
 {
     if ('0' <= c && c <= '9') return c - '0';
@@ -23,3 +24,5 @@ ExecId make_exec_id(std::string_view hex) noexcept
     }
     return id;
 }
+
+

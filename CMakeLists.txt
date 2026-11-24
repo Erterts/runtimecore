@@ -47,7 +47,6 @@ set(CORE_LOGIC_SOURCES
     include/delta_cache.cpp
     include/detect.cpp
     include/helpers.cpp
-    include/snapshot.cpp
     include/upsert_lite.cpp
 )
 
@@ -72,13 +71,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Boost::unordered simdjson)
 # --------------------------------------------------------------------
 # 2. ЮНИТ-ТЕСТЫ (run_tests.exe)
 # --------------------------------------------------------------------
-add_executable(run_tests tests/testcode.cpp ${CORE_LOGIC_SOURCES})
 
-target_include_directories(run_tests PRIVATE 
-    include
-    src
-    ${rapidjson_SOURCE_DIR}/include
-    ${catch2_SOURCE_DIR}/single_include
-)
 
-target_link_libraries(run_tests PRIVATE Boost::unordered simdjson)

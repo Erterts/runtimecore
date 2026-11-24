@@ -1,43 +1,55 @@
-
 #include "detect.hpp"
-#include <queue>
+#include <array>
 #include <shared_mutex>
-
-
+#include "delta_cache.hpp"
 extern std::shared_mutex g_pid_mtx;
 
 /* -------------------------------------------------------------
-   BFS-раскраска «Compromised→InRisk» без длинных блокировок
-   Сложность O(|subtree|) и максимум 1 µs hold-time на read-lock.
+   BFS-раскраска «Compromised -> InRisk» без динамических аллокаций
+   Сложность O(|subtree|) за счёт интрузивного списка first_child/next_sibling.
    -------------------------------------------------------------*/
 void bfs_propagate_risk(Pid root, PidMap& lite)
 {
-    std::queue<Pid> q;
-    q.push(root);
+    constexpr std::size_t MAX_BFS_NODES = 1024;
+    std::array<Pid, MAX_BFS_NODES> q{};
+    std::size_t head = 0;
+    std::size_t tail = 0;
 
-    while (!q.empty())
+    q[tail++] = root;
+
+    while (head != tail)
     {
-        Pid cur = q.front(); q.pop();
+        const Pid cur = q[head];
+        head = (head + 1) & (MAX_BFS_NODES - 1);
 
+        // Lock-per-step: держим read-lock доли микросекунды только на один узел
+        std::shared_lock rl(g_pid_mtx);
+        auto it = lite.find(cur);
+        if (it == lite.end()) continue;
 
-        LiteInfo* info = nullptr;
-        {
-            std::shared_lock rl(g_pid_mtx);          // ≈ 0.5–1 µs
-            auto it = lite.find(cur);
-            if (it == lite.end())   continue;
+        LiteInfo& info = it->second;
 
-            info = &it->second;
-
-            /* если уже помечен – продолжаем спуск, но не ставим флаг */
-            Flag old = info->flag.load(std::memory_order_relaxed);
-            if (old < Flag::InRisk)
-                info->flag.store(Flag::InRisk, std::memory_order_relaxed);
-
-            
-            for (const auto& kv : lite)              
-                if (kv.second.ppid == cur)
-                    q.push(kv.first);
+        if (cur != root) {
+            const Flag old = info.flag.load(std::memory_order_relaxed);
+            // Если узел уже в зоне риска или скомпрометирован — пропускаем повторный спуск (защита от циклов)
+            if (old == Flag::InRisk || old == Flag::Compromised) continue;
+            if (old == Flag::Clean || old == Flag::Orphan) {
+            info.flag.store(Flag::InRisk, std::memory_order_relaxed);
+            g_delta.register_event(make_event(info, /*is_new=*/false));
+            }
         }
-        /* ---- read-lock отпущен; main-thread может писать pids ----- */
+
+        //  обход детей за O(|children|)
+        for (Pid child = info.first_child; child != 0; ) {
+            auto cit = lite.find(child);
+            if (cit == lite.end()) break;
+
+            const std::size_t next_tail = (tail + 1) & (MAX_BFS_NODES - 1);
+            if (next_tail == head) break; // Защита от переполнения кольцевого буфера
+
+            q[tail] = child;
+            tail = next_tail;
+            child = cit->second.next_sibling;
+        }
     }
 }

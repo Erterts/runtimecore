@@ -1,38 +1,48 @@
-
 #pragma once
 #include <array>
 #include <string>
+#include <string_view>
 #include <optional>
 #include <memory>
 #include <vector>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <boost/unordered/unordered_node_map.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <unordered_set>
 #include <memory_resource>
 
+using Pid         = int32_t;
+using ContainerId = std::string;       // docker id / sha256 prefix
+using ExecId      = std::array<char, 32>; // sha256 (binary)
 
-using Pid       = int32_t;
-using ContainerId = std::string;          // docker id / sha256 prefix
-using ExecId    = std::array<char,32>;    // sha256 (binary)
-inline std::unordered_set<std::string> containers;
 
+constexpr uint32_t hash_container_id(std::string_view cid) noexcept {
+    if (cid.empty()) return 0; // 0 строго зарезервирован для хоста
+    uint32_t h = 2166136261u;
+    for (unsigned char c : cid) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h == 0 ? 1u : h; // Исключаем случайную коллизию с 0 (хостом)
+}
 
 enum class EventKind : uint8_t {
-    ProcExec,     // пришёл из process_exec   
+    ProcExec,     // пришёл из process_exec
     NetEvent,     // будущий сетевой
-    FileOpen,      //файловые взамодействия
+    FileOpen,     // файловые взаимодействия
     FileChmod,
-    Unknown       //под будущее расширение
+    Unknown       // под будущее расширение
 };
 
-enum class RuleId : uint8_t {           
+enum class RuleId : uint8_t {
     ReverseShell, Orphan, DownloadExec, K8sTokenRead,
     IpFanout, SysFileRewrite, TempDirExec,
     Mass777, SuidRoot, ContainerEscape
 };
-/* ---------- флаги безопасности ------------------------------------*/
+
+/* ---------- Флаги безопасности ------------------------------------*/
 enum class Flag : uint8_t {
     Clean,
     InRisk,
@@ -41,77 +51,78 @@ enum class Flag : uint8_t {
     Orphan
 };
 
-/* ---------- Super-root контейнера ----------------------------------*/
-struct SuperRoot {
-    ContainerId cid;
-    int64_t     start_ts;
-};
+/* ---------- LiteInfo для лёгкой топологии (ровно 64 байта) --------*/
+struct alignas(64) LiteInfo {
+    ExecId                exec_id{};
+    int64_t               ts{};
+    Pid                   pid{0};
+    Pid                   ppid{0};
+    Pid                   first_child{0};     // Голова списка детей (O(|subtree|) BFS)
+    Pid                   next_sibling{0};    // Следующий ребёнок того же родителя
+    uint32_t              container_hash{0};  
+    std::atomic<uint16_t> rule_bits{0};
+    std::atomic<Flag>     flag{Flag::Clean};
+    EventKind             kind{EventKind::ProcExec};
 
-/* ---------- LiteInfo  для лёгкой топологии ----------------------------------*/
-struct LiteInfo {
-    Pid pid;
-    Pid                        ppid{};
-    Pid                        gppid{};
-    int64_t                    ts{};
-    ExecId   exec_id;
-    std::atomic<Flag>          flag{Flag::Clean};
-    std::atomic<uint16_t> rule_bits {0}; // какие правила сработали
-    std::optional<ContainerId> docker_id;   // host == std::nullopt
-    std::optional<uint32_t>    uid;         // может отсутствовать у net/file
-    EventKind                  kind = EventKind::ProcExec;
     LiteInfo() = default;
 
-    /* копирующий конструктор */
     LiteInfo(const LiteInfo& rhs) noexcept
-        : pid(rhs.pid), ppid(rhs.ppid), gppid(rhs.gppid),
-          ts(rhs.ts), exec_id(rhs.exec_id),
-          flag(rhs.flag.load(std::memory_order_relaxed)),
-          docker_id(rhs.docker_id),
-          uid(rhs.uid),
+        : exec_id(rhs.exec_id),
+          ts(rhs.ts),
+          pid(rhs.pid),
+          ppid(rhs.ppid),
+          first_child(rhs.first_child),
+          next_sibling(rhs.next_sibling),
+          container_hash(rhs.container_hash),
           rule_bits(rhs.rule_bits.load(std::memory_order_relaxed)),
+          flag(rhs.flag.load(std::memory_order_relaxed)),
           kind(rhs.kind)
     {}
 
-    LiteInfo& operator=(const LiteInfo& rhs) noexcept
-    {
-        pid  = rhs.pid;  ppid  = rhs.ppid;  gppid = rhs.gppid;
-        ts   = rhs.ts;   exec_id = rhs.exec_id;
-        flag.store(rhs.flag.load(std::memory_order_relaxed),
-                   std::memory_order_relaxed);
-        docker_id = rhs.docker_id;
-        uid       = rhs.uid;
-        rule_bits.store(rhs.rule_bits.load(std::memory_order_relaxed),
-                        std::memory_order_relaxed);
-        kind = rhs.kind;
+    LiteInfo& operator=(const LiteInfo& rhs) noexcept {
+        if (this != &rhs) {
+            exec_id        = rhs.exec_id;
+            ts             = rhs.ts;
+            pid            = rhs.pid;
+            ppid           = rhs.ppid;
+            first_child    = rhs.first_child;
+            next_sibling   = rhs.next_sibling;
+            container_hash = rhs.container_hash;
+            rule_bits.store(rhs.rule_bits.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            flag.store(rhs.flag.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            kind           = rhs.kind;
+        }
         return *this;
     }
-
-    
-    LiteInfo(LiteInfo&&) noexcept            = default;
-    LiteInfo& operator=(LiteInfo&&) noexcept = default;
+    LiteInfo(LiteInfo&& rhs) noexcept : LiteInfo(static_cast<const LiteInfo&>(rhs)) {}
+    LiteInfo& operator=(LiteInfo&& rhs) noexcept { return (*this = static_cast<const LiteInfo&>(rhs)); }
 };
-/* ---------- FatInfo  (метаданные процесса) -------------------------*/
+static_assert(sizeof(LiteInfo) == 64, "LiteInfo must fit in a single 64B cache line!");
+
+/* ---------- FatInfo (метаданные процесса в PMR-арене) -------------*/
 struct ExecMeta {
-    std::pmr::string              binary;
-    std::pmr::string              arguments;
-    std::pmr::string              cwd;
-    std::optional<uint32_t>       uid;
-    std::optional<uint32_t>       gid;
+    std::pmr::string                   binary;
+    std::pmr::string                   arguments;
+    std::pmr::string                   cwd;
+    std::pmr::string                   docker_id; 
+    std::optional<uint32_t>            uid;
+    std::optional<uint32_t>            gid;
     std::pmr::vector<std::pmr::string> caps;
-    uint64_t                      ns_pid{};
+    uint64_t                           ns_pid{};
+    Pid                                gppid{0};  
 
-    /* конструктор, чтобы все pmr‐поля	сразу получили нужный ресурс */
     explicit ExecMeta(std::pmr::memory_resource* r)
-      : binary(r), arguments(r), cwd(r), caps(r) {}
-};
-struct FatInfo {
-    ExecMeta meta;
-    std::pmr::vector<Pid> child_pids;
-    EventKind                    kind = EventKind::ProcExec;
-    explicit FatInfo(std::pmr::memory_resource* r) : meta(r), child_pids(PMR<Pid>{r}) {}
+        : binary(r), arguments(r), cwd(r), docker_id(r), caps(r) {}
 };
 
-/* ---------- кастомный хешер ExecId ---------------------------------*/
+struct FatInfo {
+    ExecMeta  meta;
+    EventKind kind = EventKind::ProcExec;
+
+    explicit FatInfo(std::pmr::memory_resource* r) : meta(r) {}
+};
+
+/* ---------- Кастомный хешер ExecId ---------------------------------*/
 struct ExecHash {
     std::size_t operator()(const ExecId& id) const noexcept {
         std::size_t v;
@@ -120,41 +131,40 @@ struct ExecHash {
     }
 };
 
-/* ---------- контейнеры с PMR-аллокатором ---------------------------*/
-template<typename T> using PMR =
-        std::pmr::polymorphic_allocator<T>;
+/* ---------- Контейнеры с PMR-аллокатором ---------------------------*/
+template<typename T> using PMR = std::pmr::polymorphic_allocator<T>;
 
-using PidMap  = boost::unordered_node_map<
-                    Pid, LiteInfo,
-                    std::hash<Pid>, std::equal_to<>,
-                    PMR<std::pair<const Pid, LiteInfo>>>;
+using PidMap = boost::unordered_node_map<
+                   Pid, LiteInfo,
+                   std::hash<Pid>, std::equal_to<>,
+                   PMR<std::pair<const Pid, LiteInfo>>>;
 
 using ExecMap = boost::unordered_flat_map<
                     ExecId, std::shared_ptr<FatInfo>,
                     ExecHash, std::equal_to<>,
-                    PMR<std::pair<const ExecId,
-                                  std::shared_ptr<FatInfo>>>>;
+                    PMR<std::pair<const ExecId, std::shared_ptr<FatInfo>>>>;
 
-/* ---------- фабрика ExecId из 64-символьной hex-строки -------------*/
-ExecId make_exec_id(std::string_view hex) noexcept;   
-/* ----------привязка к виртуальному суперкорню по id контейнера-------------*/
-inline Pid make_superroot(const std::string& cid, int64_t ts,PidMap& lite)
+/* ---------- Фабрика ExecId из 64-символьной hex-строки -------------*/
+ExecId make_exec_id(std::string_view hex) noexcept;
+
+/* ---------- Привязка к виртуальному суперкорню по хэшу контейнера -*/
+inline Pid make_superroot(uint32_t cid_hash, int64_t ts, PidMap& lite)
 {
-    /* отрицательный PID на основе хеша CID во избежание повторений*/
-    Pid super_pid = -static_cast<Pid>(std::hash<std::string>{}(cid));
+    if (cid_hash == 0) return 0;
 
-    /* если уже есть — возвращаем прежний */
+    // Строго отрицательный PID (< 0), исключающий коллизии с реальными PID Linux
+    const Pid super_pid = -static_cast<Pid>((cid_hash & 0x7FFFFFFEu) + 1u);
+
     if (lite.find(super_pid) != lite.end()) return super_pid;
 
     LiteInfo root{};
-    root.pid        = super_pid;
-    root.ppid       = 0;
-    root.ts         = ts;
-    root.docker_id  = cid;
-    root.flag.store(Flag::Clean);
-    root.kind       = EventKind::ProcExec;
+    root.pid            = super_pid;
+    root.ppid           = 0;
+    root.ts             = ts;
+    root.container_hash = cid_hash;
+    root.flag.store(Flag::Clean, std::memory_order_relaxed);
+    root.kind           = EventKind::ProcExec;
 
     lite.emplace(super_pid, std::move(root));
-    containers.insert(cid);
     return super_pid;
 }
