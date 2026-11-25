@@ -22,8 +22,15 @@ inline bool rule_reverse_shell(Pid pid, const PidMap&, const ExecMap& em, AuxSta
 {
     auto fat = find_fat_by_pid(pid, g_exec_index, em);
     if (!fat || fat->meta.binary.empty()) return false;
-    bool is_shell = fat->meta.binary.ends_with("/sh");
-    return is_shell && a.ip_fanout(pid) > 0;
+
+    const std::string_view bin = fat->meta.binary;
+    const bool is_shell = bin.ends_with("/sh")   ||
+                          bin.ends_with("/bash") ||
+                          bin.ends_with("/dash") ||
+                          bin.ends_with("/zsh")  ||
+                          bin.ends_with("/ash");
+
+    return is_shell && (a.ip_fanout(pid) > 0);
 }
 
 inline bool rule_orphan(Pid pid, const PidMap& l, const ExecMap&, AuxState&)

@@ -67,6 +67,11 @@ export RR_SHM_IN="/dev/shm/radar_in"
 export RR_SHM_OUT="/dev/shm/radar_out"
 export RR_LOG_FILE="tetragon.log"
 
+mkdir -p "$RR_IN_DIR" "$RR_OUT_DIR"
+touch "$RR_IN_DIR/$RR_IN_FILE"
+
+echo '{"mode": "live"}' > "$RR_OUT_DIR/history_mode.json"
+
 ./build/runtimecore
 ```
 
@@ -76,7 +81,7 @@ export RR_LOG_FILE="tetragon.log"
 mkdir C:\dev\radar\shm -Force
 \$env:RR_SHM = "C:\dev\radar\shm"
 New-Item -Path "\$env:RR_SHM\tetragon.log" -ItemType File -Force
-
+Set-Content -Path "$shmDir\history_mode.json" -Value '{"mode": "live"}' -Encoding Ascii
 .\build\runtimecore.exe
 
 
@@ -91,9 +96,9 @@ $env:RR_IN_DIR  = $shmDir
 $env:RR_OUT_DIR = $shmDir
 $env:RR_IN_FILE = "tetragon.log"
 
-# 3. Создаём чистый пустой входной лог без BOM
+# 3. Создаём чистый пустой входной лог без BOM и управляющий буфер для history mode
 New-Item -Path "$shmDir\tetragon.log" -ItemType File -Force | Out-Null
-
+Set-Content -Path "$shmDir\history_mode.json" -Value '{"mode": "live"}' -Encoding Ascii
 # 4. Запускаем скомпилированное ядро
 .\build\runtimecore.exe
 

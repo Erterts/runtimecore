@@ -6,7 +6,7 @@
 #include "graph_struct.hpp"
 #include "delta_cache.hpp"
 #include "globals.hpp"
-
+#include "snapshot.hpp"
 class ExecIndex {
 public:
     /* true  – вставлено успешно или уже было то же самое exec_id
@@ -254,7 +254,8 @@ namespace je
         rapidjson::Writer<rapidjson::StringBuffer> w(sb);
 
         w.StartObject();
-        w.Key("_ts"); w.Int64(d.ts);
+        w.Key("_ts");  w.Int64(d.ts);
+        w.Key("type"); w.String("graph_update");
 
         if (!d.adds.empty()) {
             w.Key("add"); w.StartArray();
@@ -281,6 +282,31 @@ namespace je
         }
         w.EndObject();
 
+        out.assign(sb.GetString(), sb.GetSize());
+    }
+
+    inline void to_snapshot(const SnapshotGraph& snap, int64_t ts, std::string& out) noexcept
+    {
+        rapidjson::StringBuffer sb;
+        rapidjson::Writer<rapidjson::StringBuffer> w(sb);
+
+        w.StartObject();
+        w.Key("_ts");  w.Int64(ts);
+        w.Key("type"); w.String("snapshot_restore");
+
+        w.Key("add");
+        w.StartArray();
+        for (const auto& [pid, info] : snap) {
+            w.StartObject();
+            w.Key("id");   w.Int(info.pid);
+            w.Key("ppid"); w.Int(info.ppid);
+            w.Key("flag"); w.Int(static_cast<int>(info.flag.load(std::memory_order_relaxed)));
+            w.Key("r");    w.Uint(info.rule_bits.load(std::memory_order_relaxed));
+            w.EndObject();
+        }
+        w.EndArray();
+
+        w.EndObject();
         out.assign(sb.GetString(), sb.GetSize());
     }
 } // namespace je

@@ -31,6 +31,11 @@ public:
     void register_event(const Event& ev);
     bool flush_if_needed(int64_t now_epoch_ms, std::string& json_out);
     void set_period(int ms) noexcept { period_ms_ = ms; }
+    void clear() {
+    std::lock_guard lk(mtx_);
+    adds_.clear();
+    upds_.clear();
+}
 
 private:
     std::mutex           mtx_;

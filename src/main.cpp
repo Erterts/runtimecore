@@ -15,14 +15,14 @@
 #include "detect_state.hpp"
 #include "tmpfs.hpp"
 #include "simdjson.h"
-
+#include "history_ctrl.hpp"
 // ─── Глобальные контейнеры ─────────────────────────────────────────
 ExecIndex             g_exec_index;
 static AuxState       g_aux;
 DeltaCache     g_delta;
 static SnapshotRing<> g_ring;
 StubWheel             g_wheel;
-
+HistoryController     g_history;
 // ─── Мьютексы для карт (Reader / Writer) ───────────────────────────
 std::shared_mutex        g_pid_mtx;
 static std::shared_mutex g_exec_mtx;
@@ -174,15 +174,44 @@ int main()
             next_tick = now + BUCKET_STEP_MS;
         }
 
-        std::string delta;
-        if (g_delta.flush_if_needed(now, delta)) {
-            write_to_tmpfs("delta.json", delta);
-        }
+             // 1. Проверяем команды «Машины времени» от фронта (history_mode.json)
+     const ControlAction act = g_history.poll();
+     if (act == ControlAction::SwitchToHistory) {
+         SnapshotGraph snap;
+         if (g_ring.load_at(g_history.target_ts(), snap)) {
+             std::string snap_json;
+             je::to_snapshot(snap, g_history.target_ts(), snap_json);
+             write_to_tmpfs("delta.json", snap_json);
+         }
+     } else if (act == ControlAction::SwitchToLive) {
+         SnapshotGraph snap;
+         // Берём самый свежий срез из кольца (или актуальный g_pid_map), затираем историю на фронте
+         if (!g_ring.load_latest(snap)) {
+             std::shared_lock rl(g_pid_mtx);
+             for (const auto& [pid, info] : g_pid_map) {
+                 snap.emplace(pid, info);
+             }
+         }
+         std::string live_json;
+         je::to_snapshot(snap, now, live_json);
+         write_to_tmpfs("delta.json", live_json);
+         g_delta.clear(); // Очищаем старые дельты, чтобы не было дублей поверх snapshot_restore
+     }
 
-        {
-            std::shared_lock rl(g_pid_mtx);
-            g_ring.maybe_save(g_pid_map, now);
-        }
+     // 2. Обычный сброс инкрементальных дельт (работает ТОЛЬКО в Live-режиме!)
+     if (!g_history.is_history_mode()) {
+         std::string delta;
+         if (g_delta.flush_if_needed(now, delta)) {
+             write_to_tmpfs("delta.json", delta);
+         }
+     }
+
+     // 3. Сохранение слепка в кольцевой буфер (раз в 2000 мс)
+     {
+         std::shared_lock rl(g_pid_mtx);
+         g_ring.maybe_save(g_pid_map, now);
+     }
+
     }
 
     // Graceful-exit: будим воркеры, чтобы они дочитали остаток очередей до конца
